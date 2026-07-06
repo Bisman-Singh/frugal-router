@@ -42,7 +42,7 @@ def test_run_eval_metrics_and_records(tmp_path):
         Task(id="2", input="What is 3 + 3?", type="math", expected="6"),
     ]
     # Confident both times; the second local answer is wrong.
-    local = MockLocalBackend(["Answer: 4", "Answer: 7"], yes_prob=0.95)
+    local = MockLocalBackend(["Answer: 4", "Answer: 7"])
     agent = make_agent(local, MockRemoteBackend())
     report = run_eval(agent, tasks, out_dir=str(tmp_path))
 
@@ -57,7 +57,7 @@ def test_run_eval_metrics_and_records(tmp_path):
 
 def test_collect_remote_adds_counterfactuals(tmp_path):
     tasks = [Task(id="1", input="What is 2 + 2?", type="math", expected="4")]
-    local = MockLocalBackend(["Answer: 4"], yes_prob=0.95)
+    local = MockLocalBackend(["Answer: 4"])
     remote = MockRemoteBackend(["4"])
     agent = make_agent(local, remote)
     report = run_eval(agent, tasks, collect_remote=True)

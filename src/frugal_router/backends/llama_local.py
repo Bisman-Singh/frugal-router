@@ -1,7 +1,5 @@
-"""llama.cpp local backend. Loads once, stays warm, exposes logprob signals."""
+"""llama.cpp local backend. Loads once, stays warm, exposes token logprobs."""
 from __future__ import annotations
-
-import math
 
 from .base import Generation
 
@@ -61,51 +59,15 @@ class LlamaLocalBackend:
             generations.append(
                 Generation(
                     text=choice.get("message", {}).get("content") or "",
-                    mean_logprob=_mean_logprob(choice),
+                    token_logprobs=_token_logprobs(choice),
                     prompt_tokens=usage.get("prompt_tokens", 0),
                     completion_tokens=usage.get("completion_tokens", 0),
                 )
             )
         return generations
 
-    def yes_probability(self, question: str) -> float | None:
-        resp = self._chat(
-            None,
-            question,
-            temperature=0.0,
-            max_tokens=2,
-            logprobs=True,
-            top_logprobs=10,
-        )
-        choice = resp["choices"][0]
-        top = _first_token_top_logprobs(choice)
-        if top:
-            p_yes = sum(math.exp(t["logprob"]) for t in top if _is_word(t, "yes"))
-            p_no = sum(math.exp(t["logprob"]) for t in top if _is_word(t, "no"))
-            if p_yes + p_no > 0:
-                return p_yes / (p_yes + p_no)
-        text = (choice.get("message", {}).get("content") or "").strip().lower()
-        if text.startswith("yes"):
-            return 1.0
-        if text.startswith("no"):
-            return 0.0
-        return None
 
-
-def _is_word(entry: dict, word: str) -> bool:
-    return entry.get("token", "").strip().lower().startswith(word)
-
-
-def _first_token_top_logprobs(choice: dict) -> list[dict]:
-    content = (choice.get("logprobs") or {}).get("content") or []
-    if not content:
-        return []
-    return content[0].get("top_logprobs") or []
-
-
-def _mean_logprob(choice: dict) -> float | None:
+def _token_logprobs(choice: dict) -> list[float] | None:
     content = (choice.get("logprobs") or {}).get("content") or []
     values = [t["logprob"] for t in content if t.get("logprob") is not None]
-    if not values:
-        return None
-    return sum(values) / len(values)
+    return values or None

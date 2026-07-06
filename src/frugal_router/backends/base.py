@@ -8,7 +8,7 @@ from typing import Protocol, runtime_checkable
 @dataclass
 class Generation:
     text: str
-    mean_logprob: float | None = None
+    token_logprobs: list[float] | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
@@ -26,8 +26,6 @@ class LocalBackend(Protocol):
         temperature: float = 0.0,
         max_tokens: int = 512,
     ) -> list[Generation]: ...
-
-    def yes_probability(self, question: str) -> float | None: ...
 
 
 @runtime_checkable

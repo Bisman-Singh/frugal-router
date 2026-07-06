@@ -16,7 +16,6 @@ class Policy:
     local_max_tokens: int = 512
     escalation_threshold: float = 0.65
     p_fail_cutoff: float = 0.65
-    use_verification: bool = True
     remote_model: str = ""  # empty = the configured default remote model
     remote_max_tokens: int = 32
     remote_cot: bool = False

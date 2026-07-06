@@ -43,14 +43,6 @@ def local_solve(
     return system, "\n".join(parts)
 
 
-def verification(question: str, candidate: str) -> str:
-    return (
-        f"Question: {question}\n"
-        f"Proposed answer: {candidate}\n"
-        "Is the proposed answer correct? Reply with only one word: yes or no."
-    )
-
-
 def compression(question: str, context: str) -> tuple[str, str]:
     system = (
         "From the text below, extract only the minimal set of sentences needed to "

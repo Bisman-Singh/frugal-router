@@ -14,7 +14,7 @@ remote:
   max_retries: 2
 
 router:
-  weights: { agreement: 0.4, logprob: 0.2, verify: 0.2, predictor: 0.2 }
+  weights: { agreement: 0.6, logprob: 0.25, predictor: 0.15 }
   predictor_path: artifacts/predictor.joblib
 
 policies:

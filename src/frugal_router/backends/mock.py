@@ -14,13 +14,11 @@ class MockLocalBackend:
     def __init__(
         self,
         responses: list | None = None,
-        yes_prob: float | None = 0.9,
-        mean_logprob: float | None = -0.05,
+        token_logprobs: list[float] | None = (-0.05, -0.05, -0.05),
         fail: bool = False,
     ):
         self._queue = list(responses or [])
-        self.yes_prob = yes_prob
-        self.mean_logprob = mean_logprob
+        self.token_logprobs = list(token_logprobs) if token_logprobs else None
         self.fail = fail
         self.calls: list[dict] = []
 
@@ -33,13 +31,9 @@ class MockLocalBackend:
         while len(texts) < n:
             texts.append(texts[-1])
         return [
-            Generation(text=t, mean_logprob=self.mean_logprob, completion_tokens=len(t) // 4)
+            Generation(text=t, token_logprobs=self.token_logprobs, completion_tokens=len(t) // 4)
             for t in texts[:n]
         ]
-
-    def yes_probability(self, question: str) -> float | None:
-        self.calls.append({"verify": question})
-        return self.yes_prob
 
 
 class MockRemoteBackend:

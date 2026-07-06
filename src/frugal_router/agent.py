@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from . import prompts
 from .classify import classify
 from .compress import maybe_compress
-from .confidence import ConfidenceReport, combine, vote
+from .confidence import ConfidenceReport, combine, logprob_quantile, vote
 from .extract import extract_answer, is_valid, normalize
 from .ledger import Ledger
 from .policy import Policy, PolicyBook
@@ -89,30 +89,41 @@ class RoutingAgent:
         question = prompts.question_text(task.rendered_input(), task.context)
         spec = prompts.format_spec_for(task_type, policy.format_spec or None)
         system, user = prompts.local_solve(question, task_type, spec, policy.few_shot)
+
+        # Adaptive self-consistency: a small first window, extended to the full
+        # sample budget only when the window disagrees. Unanimity stops early.
+        window = min(policy.n_samples, 3)
         gens = self.local.generate(
             system,
             user,
-            n=policy.n_samples,
-            temperature=policy.sample_temperature if policy.n_samples > 1 else 0.0,
+            n=window,
+            temperature=policy.sample_temperature if window > 1 else 0.0,
             max_tokens=policy.local_max_tokens,
         )
         normalized = [normalize(extract_answer(g.text), task_type) for g in gens]
         candidate, agreement = vote(normalized)
-        verify = None
-        if policy.use_verification and candidate:
-            verify = self.local.yes_probability(prompts.verification(question, candidate))
-        p_fail = self.predictor.p_fail(task.input) if self.predictor else None
+        if agreement < 1.0 and policy.n_samples > window:
+            extra = self.local.generate(
+                system,
+                user,
+                n=policy.n_samples - window,
+                temperature=policy.sample_temperature,
+                max_tokens=policy.local_max_tokens,
+            )
+            gens += extra
+            normalized += [normalize(extract_answer(g.text), task_type) for g in extra]
+            candidate, agreement = vote(normalized)
+
         report = ConfidenceReport(
             candidate=candidate,
             agreement=agreement,
-            n_samples=policy.n_samples,
-            mean_logprob=_best_logprob(gens, normalized, candidate),
-            verify_yes_prob=verify,
-            p_fail=p_fail,
+            n_samples=len(gens),
+            logprob=_best_logprob(gens, normalized, candidate),
+            p_fail=self.predictor.p_fail(task.input) if self.predictor else None,
             format_valid=is_valid(candidate, task_type),
         )
         report.score = combine(report, self.weights)
-        path.append(f"local:agreement={agreement:.2f},score={report.score:.2f}")
+        path.append(f"local:n={len(gens)},agreement={agreement:.2f},score={report.score:.2f}")
         return report
 
     @staticmethod
@@ -210,11 +221,14 @@ class RoutingAgent:
 
 
 def _best_logprob(gens, normalized, candidate) -> float | None:
+    """Pessimistic quantile logprob of the most confident candidate-matching sample."""
     if candidate is None:
         return None
     values = [
-        g.mean_logprob
+        quantile
         for g, n in zip(gens, normalized)
-        if n == candidate and g.mean_logprob is not None
+        if n == candidate
+        for quantile in [logprob_quantile(g.token_logprobs)]
+        if quantile is not None
     ]
     return max(values) if values else None
