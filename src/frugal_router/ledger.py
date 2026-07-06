@@ -25,7 +25,6 @@ class Ledger:
             "tasks": total,
             "local_answers": sources.count("local"),
             "remote_answers": sources.count("remote"),
-            "cache_answers": sources.count("cache"),
             "fallback_answers": sources.count("fallback"),
             "remote_prompt_tokens": sum(e.get("remote_prompt_tokens", 0) for e in self.entries),
             "remote_completion_tokens": sum(

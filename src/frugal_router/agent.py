@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from . import prompts
-from .cache import ResponseCache
 from .classify import classify
 from .compress import maybe_compress
 from .confidence import ConfidenceReport, combine, vote
@@ -22,7 +21,7 @@ from .tasks import Task
 class SolveResult:
     task_id: str
     answer: str
-    source: str  # local | remote | cache | fallback
+    source: str  # local | remote | fallback
     task_type: str
     local_candidate: str | None = None
     confidence: ConfidenceReport | None = None
@@ -40,7 +39,6 @@ class RoutingAgent:
         *,
         default_remote_model: str = "",
         predictor=None,
-        cache: ResponseCache | None = None,
         ledger: Ledger | None = None,
         weights: dict | None = None,
     ):
@@ -49,7 +47,6 @@ class RoutingAgent:
         self.policies = policies
         self.default_remote_model = default_remote_model
         self.predictor = predictor
-        self.cache = cache
         self.ledger = ledger
         self.weights = weights
 
@@ -76,11 +73,8 @@ class RoutingAgent:
             )
 
         try:
-            answer, pt, ct, cached = self._remote_answer(task, task_type, policy, path)
-            source = "cache" if cached else "remote"
-            if cached:
-                pt = ct = 0  # cached responses bill nothing
-            return self._finish(task, task_type, answer, source, report, pt, ct, path)
+            answer, pt, ct = self._remote_answer(task, task_type, policy, path)
+            return self._finish(task, task_type, answer, "remote", report, pt, ct, path)
         except Exception as exc:
             path.append(f"remote_error:{type(exc).__name__}")
             fallback = report.candidate if report and report.candidate else ""
@@ -140,8 +134,7 @@ class RoutingAgent:
     def remote_answer(self, task: Task, task_type: str | None = None):
         """Direct remote query, used by the harness to collect counterfactuals.
 
-        Returns (answer, prompt_tokens, completion_tokens, from_cache); on a
-        cache hit the tokens are the original call's would-be cost.
+        Returns (answer, prompt_tokens, completion_tokens).
         """
         task_type = task_type or classify(task)
         policy = self.policies.for_type(task_type)
@@ -149,7 +142,7 @@ class RoutingAgent:
 
     def _remote_answer(
         self, task: Task, task_type: str, policy: Policy, path: list[str]
-    ) -> tuple[str, int, int, bool]:
+    ) -> tuple[str, int, int]:
         if self.remote is None:
             raise RuntimeError("no remote backend configured")
         spec = prompts.format_spec_for(task_type, policy.format_spec or None)
@@ -165,30 +158,12 @@ class RoutingAgent:
         if not model:
             raise RuntimeError("no remote model configured")
 
-        key = None
-        if self.cache is not None:
-            key = ResponseCache.key(model=model, prompt=prompt, max_tokens=policy.remote_max_tokens)
-            hit = self.cache.get(key)
-            if hit is not None:
-                path.append("cache_hit")
-                answer = self._parse_remote(hit["text"], task_type, spec, path)
-                return answer, hit.get("prompt_tokens", 0), hit.get("completion_tokens", 0), True
-
         gen = self.remote.generate(
             None, prompt, model=model, temperature=0.0, max_tokens=policy.remote_max_tokens
         )
-        if self.cache is not None and key is not None:
-            self.cache.put(
-                key,
-                {
-                    "text": gen.text,
-                    "prompt_tokens": gen.prompt_tokens,
-                    "completion_tokens": gen.completion_tokens,
-                },
-            )
         path.append(f"remote:{model}")
         answer = self._parse_remote(gen.text, task_type, spec, path)
-        return answer, gen.prompt_tokens, gen.completion_tokens, False
+        return answer, gen.prompt_tokens, gen.completion_tokens
 
     def _parse_remote(self, text: str, task_type: str, spec: str, path: list[str]) -> str:
         raw = (extract_answer(text) or text or "").strip()

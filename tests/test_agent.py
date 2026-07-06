@@ -1,6 +1,5 @@
 from frugal_router.agent import RoutingAgent
 from frugal_router.backends.mock import MockLocalBackend, MockRemoteBackend
-from frugal_router.cache import ResponseCache
 from frugal_router.ledger import Ledger
 from frugal_router.policy import PolicyBook
 from frugal_router.tasks import Task
@@ -8,14 +7,13 @@ from frugal_router.tasks import Task
 MATH = Task(id="m1", input="What is 12 + 7?", type="math")
 
 
-def make_agent(local, remote, *, per_type=None, cache=None, ledger=None):
+def make_agent(local, remote, *, per_type=None, ledger=None):
     defaults = {"n_samples": 3, "escalation_threshold": 0.6}
     return RoutingAgent(
         local,
         remote,
         PolicyBook(defaults, per_type),
         default_remote_model="test-model",
-        cache=cache,
         ledger=ledger,
     )
 
@@ -72,22 +70,6 @@ def test_always_remote_policy_skips_local():
     result = agent.solve(MATH)
     assert result.source == "remote"
     assert local.calls == []
-
-
-def test_cache_makes_second_escalation_free():
-    local = MockLocalBackend(
-        [["Answer: 1", "Answer: 2", "Answer: 3"], ["Answer: 1", "Answer: 2", "Answer: 3"]],
-        yes_prob=0.0,
-    )
-    remote = MockRemoteBackend(["19"])
-    agent = make_agent(local, remote, cache=ResponseCache())
-    first = agent.solve(MATH)
-    second = agent.solve(MATH)
-    assert first.source == "remote"
-    assert second.source == "cache"
-    assert second.answer == "19"
-    assert second.remote_prompt_tokens == 0
-    assert len(remote.calls) == 1
 
 
 def test_invalid_remote_format_is_reformatted_locally():

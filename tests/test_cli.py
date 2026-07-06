@@ -8,7 +8,7 @@ def test_run_command_produces_answers_file(tmp_path, monkeypatch):
     monkeypatch.delenv("FIREWORKS_API_KEY", raising=False)
 
     config = tmp_path / "config.yaml"
-    config.write_text("router:\n  cache_path: cache.sqlite\n")
+    config.write_text("router: {}\n")
     tasks = tmp_path / "tasks.jsonl"
     tasks.write_text(json.dumps({"id": "t1", "input": "What is 2 + 2?"}) + "\n")
     output = tmp_path / "answers.jsonl"

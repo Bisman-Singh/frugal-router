@@ -64,7 +64,7 @@ def run_eval(agent, tasks: list[Task], *, out_dir: str | None = None,
             record.update({f"conf_{k}": v for k, v in conf.items()})
         if collect_remote:
             try:
-                r_answer, r_pt, r_ct, _ = agent.remote_answer(task, result.task_type)
+                r_answer, r_pt, r_ct = agent.remote_answer(task, result.task_type)
                 record["remote_answer"] = r_answer
                 record["remote_correct"] = grade(task, r_answer, result.task_type)
                 record["remote_probe_prompt_tokens"] = r_pt

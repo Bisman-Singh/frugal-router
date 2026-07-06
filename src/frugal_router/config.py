@@ -33,7 +33,6 @@ class Settings:
     remote: RemoteConfig
     policies: PolicyBook
     weights: dict | None = None
-    cache_path: str = "artifacts/remote_cache.sqlite"
     predictor_path: str = "artifacts/predictor.joblib"
 
 
@@ -47,7 +46,6 @@ def load_settings(path: str | Path) -> Settings:
         remote=RemoteConfig(**(raw.get("remote") or {})),
         policies=PolicyBook(policies_raw.get("defaults"), policies_raw.get("per_type")),
         weights=router.get("weights"),
-        cache_path=router.get("cache_path", "artifacts/remote_cache.sqlite"),
         predictor_path=router.get("predictor_path", "artifacts/predictor.joblib"),
     )
 
@@ -56,7 +54,6 @@ def build_agent(settings: Settings, *, ledger=None):
     """Assemble the agent from settings. Missing pieces degrade gracefully:
     no GGUF file means remote-only, no API key means local-only."""
     from .agent import RoutingAgent
-    from .cache import ResponseCache
     from .predictor import FailurePredictor
 
     local = None
@@ -87,7 +84,6 @@ def build_agent(settings: Settings, *, ledger=None):
         settings.policies,
         default_remote_model=settings.remote.default_model,
         predictor=FailurePredictor.load(settings.predictor_path),
-        cache=ResponseCache(settings.cache_path),
         ledger=ledger,
         weights=settings.weights,
     )

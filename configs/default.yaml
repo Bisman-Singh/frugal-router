@@ -15,7 +15,6 @@ remote:
 
 router:
   weights: { agreement: 0.4, logprob: 0.2, verify: 0.2, predictor: 0.2 }
-  cache_path: artifacts/remote_cache.sqlite
   predictor_path: artifacts/predictor.joblib
 
 policies:
