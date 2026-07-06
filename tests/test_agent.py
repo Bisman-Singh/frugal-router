@@ -82,7 +82,7 @@ def test_invalid_remote_format_is_reformatted_locally():
 
 def test_long_context_is_compressed_before_remote():
     context = "This filler sentence pads the passage. " * 500
-    task = Task(id="e1", input="Who is the CEO?", context=context, type="extraction")
+    task = Task(id="e1", input="Who is the CEO?", context=context, type="factual")
     local = MockLocalBackend(
         [
             ["Answer: alice", "Answer: bob", "Answer: carol"],  # disagreeing solve samples
@@ -92,7 +92,7 @@ def test_long_context_is_compressed_before_remote():
     remote = MockRemoteBackend(["Alice"])
     result = make_agent(local, remote).solve(task)
     assert result.source == "remote"
-    assert result.answer == "alice"
+    assert result.answer == "Alice"
     assert "compressed_context" in result.decision_path
     assert "filler sentence" not in remote.calls[0]["user"]
 

@@ -1,7 +1,7 @@
 """The cascade agent: answer locally for free, escalate only on low confidence.
 
 Fail safe, never silent: a local crash escalates, a remote crash falls back to
-the best local candidate. The agent always returns an answer.
+the best local answer. The agent always returns an answer.
 """
 from __future__ import annotations
 
@@ -11,7 +11,8 @@ from . import prompts
 from .classify import classify
 from .compress import maybe_compress
 from .confidence import ConfidenceReport, combine, logprob_quantile, vote
-from .extract import extract_answer, is_valid, normalize
+from .contracts import STYLE_LINE, style_of
+from .extract import final_answer, is_valid_answer, vote_key
 from .ledger import Ledger
 from .policy import Policy, PolicyBook
 from .tasks import Task
@@ -23,7 +24,7 @@ class SolveResult:
     answer: str
     source: str  # local | remote | fallback
     task_type: str
-    local_candidate: str | None = None
+    local_answer: str | None = None
     confidence: ConfidenceReport | None = None
     remote_prompt_tokens: int = 0
     remote_completion_tokens: int = 0
@@ -57,38 +58,41 @@ class RoutingAgent:
         policy = self.policies.for_type(task_type)
 
         report = None
+        local_answer = None
         if self.local is None:
             path.append("no_local_backend")
         elif policy.always_remote:
             path.append("policy:always_remote")
         else:
             try:
-                report = self._local_attempt(task, task_type, policy, path)
+                report, local_answer = self._local_attempt(task, task_type, policy, path)
             except Exception as exc:
                 path.append(f"local_error:{type(exc).__name__}")
 
         if report is not None and not self._should_escalate(report, policy, path):
             return self._finish(
-                task, task_type, report.candidate or "", "local", report, 0, 0, path
+                task, task_type, local_answer or "", "local", report, local_answer, 0, 0, path
             )
 
         try:
             answer, pt, ct = self._remote_answer(task, task_type, policy, path)
-            return self._finish(task, task_type, answer, "remote", report, pt, ct, path)
+            return self._finish(
+                task, task_type, answer, "remote", report, local_answer, pt, ct, path
+            )
         except Exception as exc:
             path.append(f"remote_error:{type(exc).__name__}")
-            fallback = report.candidate if report and report.candidate else ""
             path.append("fallback")
-            return self._finish(task, task_type, fallback, "fallback", report, 0, 0, path)
+            return self._finish(
+                task, task_type, local_answer or "", "fallback", report, local_answer, 0, 0, path
+            )
 
     # -- local -----------------------------------------------------------
 
     def _local_attempt(
         self, task: Task, task_type: str, policy: Policy, path: list[str]
-    ) -> ConfidenceReport:
+    ) -> tuple[ConfidenceReport, str | None]:
         question = prompts.question_text(task.rendered_input(), task.context)
-        spec = prompts.format_spec_for(task_type, policy.format_spec or None)
-        system, user = prompts.local_solve(question, task_type, spec, policy.few_shot)
+        system, user = prompts.local_solve(question, task_type, policy.few_shot)
 
         # Adaptive self-consistency: a small first window, extended to the full
         # sample budget only when the window disagrees. Unanimity stops early.
@@ -100,8 +104,8 @@ class RoutingAgent:
             temperature=policy.sample_temperature if window > 1 else 0.0,
             max_tokens=policy.local_max_tokens,
         )
-        normalized = [normalize(extract_answer(g.text), task_type) for g in gens]
-        candidate, agreement = vote(normalized)
+        keys = [vote_key(g.text, task_type) for g in gens]
+        candidate, agreement = vote(keys)
         if agreement < 1.0 and policy.n_samples > window:
             extra = self.local.generate(
                 system,
@@ -111,20 +115,22 @@ class RoutingAgent:
                 max_tokens=policy.local_max_tokens,
             )
             gens += extra
-            normalized += [normalize(extract_answer(g.text), task_type) for g in extra]
-            candidate, agreement = vote(normalized)
+            keys += [vote_key(g.text, task_type) for g in extra]
+            candidate, agreement = vote(keys)
 
+        best = _representative(gens, keys, candidate)
+        answer = final_answer(best.text, task_type) if best else None
         report = ConfidenceReport(
             candidate=candidate,
             agreement=agreement,
             n_samples=len(gens),
-            logprob=_best_logprob(gens, normalized, candidate),
+            logprob=_best_logprob(gens, keys, candidate),
             p_fail=self.predictor.p_fail(task.input) if self.predictor else None,
-            format_valid=is_valid(candidate, task_type),
+            format_valid=is_valid_answer(answer, task_type),
         )
         report.score = combine(report, self.weights)
         path.append(f"local:n={len(gens)},agreement={agreement:.2f},score={report.score:.2f}")
-        return report
+        return report, answer
 
     @staticmethod
     def _should_escalate(report: ConfidenceReport, policy: Policy, path: list[str]) -> bool:
@@ -156,15 +162,15 @@ class RoutingAgent:
     ) -> tuple[str, int, int]:
         if self.remote is None:
             raise RuntimeError("no remote backend configured")
-        spec = prompts.format_spec_for(task_type, policy.format_spec or None)
-        context, compressed = maybe_compress(
-            self.local, task.rendered_input(), task.context, policy.compress_over_chars
-        )
-        if compressed:
-            path.append("compressed_context")
+        context = task.context
+        if policy.allow_compression:
+            context, compressed = maybe_compress(
+                self.local, task.rendered_input(), task.context, policy.compress_over_chars
+            )
+            if compressed:
+                path.append("compressed_context")
         question = prompts.question_text(task.rendered_input(), context)
-        build = prompts.remote_cot if policy.remote_cot else prompts.remote_minimal
-        prompt = build(question, spec)
+        prompt = prompts.remote_solve(question, task_type, cot=policy.remote_cot)
         model = policy.remote_model or self.default_remote_model
         if not model:
             raise RuntimeError("no remote model configured")
@@ -173,32 +179,38 @@ class RoutingAgent:
             None, prompt, model=model, temperature=0.0, max_tokens=policy.remote_max_tokens
         )
         path.append(f"remote:{model}")
-        answer = self._parse_remote(gen.text, task_type, spec, path)
+        answer = self._parse_remote(gen.text, task_type, path)
         return answer, gen.prompt_tokens, gen.completion_tokens
 
-    def _parse_remote(self, text: str, task_type: str, spec: str, path: list[str]) -> str:
-        raw = (extract_answer(text) or text or "").strip()
-        answer = normalize(raw, task_type)
-        if not is_valid(answer, task_type) and self.local is not None and raw:
-            # Free local reformat instead of a second billed call.
+    def _parse_remote(self, text: str, task_type: str, path: list[str]) -> str:
+        answer = final_answer(text, task_type)
+        if (
+            not is_valid_answer(answer, task_type)
+            and answer
+            and self.local is not None
+            and style_of(task_type) == STYLE_LINE
+        ):
+            # Free local repair instead of a second billed call.
             try:
-                system, user = prompts.reformat(raw, spec)
-                gens = self.local.generate(system, user, n=1, temperature=0.0, max_tokens=64)
-                answer = normalize(extract_answer(gens[0].text), task_type)
-                path.append("local_reformat")
+                system, user = prompts.reformat(answer, task_type)
+                gens = self.local.generate(system, user, n=1, temperature=0.0, max_tokens=128)
+                reshaped = final_answer(gens[0].text, task_type)
+                if is_valid_answer(reshaped, task_type):
+                    path.append("local_reformat")
+                    answer = reshaped
             except Exception:
                 pass
-        if is_valid(answer, task_type):
-            return answer
-        return answer or raw or ""
+        return answer or (text or "").strip()
 
-    def _finish(self, task, task_type, answer, source, report, pt, ct, path) -> SolveResult:
+    def _finish(
+        self, task, task_type, answer, source, report, local_answer, pt, ct, path
+    ) -> SolveResult:
         result = SolveResult(
             task_id=task.id,
             answer=answer or "",
             source=source,
             task_type=task_type,
-            local_candidate=report.candidate if report else None,
+            local_answer=local_answer,
             confidence=report,
             remote_prompt_tokens=pt,
             remote_completion_tokens=ct,
@@ -220,14 +232,27 @@ class RoutingAgent:
         return result
 
 
-def _best_logprob(gens, normalized, candidate) -> float | None:
+def _representative(gens, keys, candidate):
+    """The candidate-matching sample with the most confident answer tokens."""
+    if candidate is None:
+        return gens[0] if gens else None
+    matching = [g for g, k in zip(gens, keys) if k == candidate]
+    if not matching:
+        return gens[0] if gens else None
+    return max(
+        matching,
+        key=lambda g: logprob_quantile(g.token_logprobs) or float("-inf"),
+    )
+
+
+def _best_logprob(gens, keys, candidate) -> float | None:
     """Pessimistic quantile logprob of the most confident candidate-matching sample."""
     if candidate is None:
         return None
     values = [
         quantile
-        for g, n in zip(gens, normalized)
-        if n == candidate
+        for g, k in zip(gens, keys)
+        if k == candidate
         for quantile in [logprob_quantile(g.token_logprobs)]
         if quantile is not None
     ]

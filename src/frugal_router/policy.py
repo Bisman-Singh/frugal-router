@@ -20,8 +20,8 @@ class Policy:
     remote_max_tokens: int = 32
     remote_cot: bool = False
     always_remote: bool = False
+    allow_compression: bool = True  # never compress what the judge must see in full
     compress_over_chars: int = 6000
-    format_spec: str = ""  # empty = the default spec for the task type
     few_shot: list = field(default_factory=list)
 
     @classmethod

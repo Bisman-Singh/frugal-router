@@ -10,7 +10,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-from .extract import normalize
+from .extract import normalize_number, text_key
 from .tasks import Task
 
 
@@ -20,23 +20,34 @@ def grade(task: Task, answer: str | None, task_type: str) -> bool | None:
         return None
     if answer is None or answer == "":
         return False
-    grader = task.grader or (
-        "contains_all"
-        if isinstance(task.expected, list)
-        else ("numeric" if task_type == "math" else "exact")
-    )
+    grader = task.grader or _default_grader(task, task_type)
     if grader == "contains_all":
         expected = task.expected if isinstance(task.expected, list) else [task.expected]
         hay = str(answer).casefold()
         return all(str(kw).casefold() in hay for kw in expected)
-    expected_norm = normalize(str(task.expected), task_type)
-    answer_norm = normalize(str(answer), task_type)
     if grader == "numeric":
+        expected_num = normalize_number(str(task.expected))
+        answer_num = normalize_number(str(answer))
         try:
-            return abs(float(expected_norm) - float(answer_norm)) < 1e-6
-        except (TypeError, ValueError):
+            return (
+                expected_num is not None
+                and answer_num is not None
+                and abs(float(expected_num) - float(answer_num)) < 1e-6
+            )
+        except ValueError:
             return False
-    return expected_norm is not None and expected_norm == answer_norm
+    expected_key = text_key(str(task.expected))
+    return expected_key is not None and expected_key == text_key(str(answer))
+
+
+def _default_grader(task: Task, task_type: str) -> str:
+    if isinstance(task.expected, list):
+        return "contains_all"
+    if task_type == "math":
+        return "numeric"
+    if task_type in ("factual", "logic"):
+        return "exact"
+    return "contains_all"
 
 
 def run_eval(agent, tasks: list[Task], *, out_dir: str | None = None,
@@ -52,8 +63,8 @@ def run_eval(agent, tasks: list[Task], *, out_dir: str | None = None,
             "answer": result.answer,
             "correct": grade(task, result.answer, result.task_type),
             "source": result.source,
-            "local_candidate": result.local_candidate,
-            "local_correct": grade(task, result.local_candidate, result.task_type),
+            "local_answer": result.local_answer,
+            "local_correct": grade(task, result.local_answer, result.task_type),
             "remote_prompt_tokens": result.remote_prompt_tokens,
             "remote_completion_tokens": result.remote_completion_tokens,
             "decision_path": result.decision_path,

@@ -1,29 +1,34 @@
+{"id": "fact-1", "type": "factual", "input": "What is the capital of Australia?", "expected": "canberra"}
+{"id": "fact-2", "type": "factual", "input": "In which year did the Berlin Wall fall?", "expected": "1989"}
+{"id": "fact-3", "type": "factual", "input": "What is the chemical symbol for gold?", "expected": "au"}
+{"id": "fact-4", "type": "factual", "input": "Which planet in our solar system is the largest?", "expected": "jupiter"}
+{"id": "fact-5", "type": "factual", "input": "Who painted the Mona Lisa?", "expected": "leonardo da vinci"}
 {"id": "math-1", "type": "math", "input": "A bakery sells muffins for $3 each. If Maria buys 7 muffins, how much does she pay in total?", "expected": "21"}
-{"id": "math-2", "type": "math", "input": "A train travels at 60 km per hour for 2.5 hours. How far does it travel?", "expected": "150"}
-{"id": "math-3", "type": "math", "input": "48 cookies are shared equally among 6 children. How many cookies does each child get?", "expected": "8"}
-{"id": "math-4", "type": "math", "input": "What is 15 percent of 200?", "expected": "30"}
-{"id": "math-5", "type": "math", "input": "Tom had 23 marbles. He lost 9 and then found 4 more. How many marbles does he have now?", "expected": "18"}
-{"id": "math-6", "type": "math", "input": "A rectangle is 12 meters long and 5 meters wide. What is its area in square meters?", "expected": "60"}
-{"id": "math-7", "type": "math", "input": "Three shirts cost $14 each. With a $10 discount on the total, how much do you pay?", "expected": "32"}
-{"id": "math-8", "type": "math", "input": "What is 124 + 387?", "expected": "511"}
-{"id": "mcq-1", "type": "mcq", "input": "Which planet is known as the Red Planet?", "choices": ["Venus", "Mars", "Jupiter", "Saturn"], "expected": "B"}
-{"id": "mcq-2", "type": "mcq", "input": "What is the capital of Japan?", "choices": ["Seoul", "Beijing", "Tokyo", "Bangkok"], "expected": "C"}
-{"id": "mcq-3", "type": "mcq", "input": "Which is the largest ocean on Earth?", "choices": ["Atlantic", "Indian", "Arctic", "Pacific"], "expected": "D"}
-{"id": "mcq-4", "type": "mcq", "input": "What is the chemical formula for water?", "choices": ["CO2", "H2O", "NaCl", "O2"], "expected": "B"}
-{"id": "mcq-5", "type": "mcq", "input": "Who wrote Romeo and Juliet?", "choices": ["Charles Dickens", "Jane Austen", "William Shakespeare", "Mark Twain"], "expected": "C"}
-{"id": "cls-1", "type": "classification", "input": "Classify the sentiment of this review as positive or negative: 'Absolutely loved it, would buy again!'", "expected": "positive"}
-{"id": "cls-2", "type": "classification", "input": "Classify the sentiment of this review as positive or negative: 'Terrible quality, broke after one day.'", "expected": "negative"}
-{"id": "cls-3", "type": "classification", "input": "Classify this email as spam or not spam: 'CONGRATULATIONS! You won $1,000,000. Click here NOW to claim.'", "expected": "spam"}
-{"id": "cls-4", "type": "classification", "input": "Classify the topic of this headline as sports, politics, or technology: 'Local team clinches championship in overtime thriller.'", "expected": "sports"}
-{"id": "cls-5", "type": "classification", "input": "Classify the sentiment of this review as positive or negative: 'The packaging was nice but the product itself is useless.'", "expected": "negative"}
-{"id": "ext-1", "type": "extraction", "context": "The Golden Gate Bridge opened in 1937 and spans 2737 meters across the strait connecting San Francisco Bay to the Pacific Ocean.", "input": "In what year did the Golden Gate Bridge open?", "expected": "1937"}
-{"id": "ext-2", "type": "extraction", "context": "Amara Okafor founded the logistics startup Swiftline in 2019 after leaving her job as a port operations manager in Lagos.", "input": "Who founded Swiftline?", "expected": "amara okafor"}
-{"id": "ext-3", "type": "extraction", "context": "The recipe calls for 250 grams of flour, two eggs, a pinch of salt, and 150 milliliters of milk, whisked until smooth.", "input": "How many grams of flour does the recipe call for?", "expected": "250"}
-{"id": "ext-4", "type": "extraction", "context": "The museum is open Tuesday through Sunday from 9 am to 5 pm, and admission is free on the first Saturday of every month.", "input": "On which day is the museum closed?", "expected": "monday"}
-{"id": "ext-5", "type": "extraction", "context": "Mount Kilimanjaro, the highest mountain in Africa, rises 5895 meters above sea level in northeastern Tanzania.", "input": "How tall is Mount Kilimanjaro in meters?", "expected": "5895"}
-{"id": "gen-1", "type": "general", "input": "What is the capital of France?", "expected": "paris"}
-{"id": "gen-2", "type": "general", "input": "How many days are there in a week?", "expected": "7"}
-{"id": "gen-3", "type": "general", "input": "What is the chemical symbol for gold?", "expected": "au"}
-{"id": "gen-4", "type": "general", "input": "Which planet in our solar system is the largest?", "expected": "jupiter"}
-{"id": "sum-1", "type": "summarization", "input": "Summarize in one sentence: The new library opened downtown on Saturday. Hundreds of residents attended the opening ceremony. The mayor called it the city's biggest investment in education this decade.", "expected": ["library"], "grader": "contains_all"}
-{"id": "sum-2", "type": "summarization", "input": "Summarize in one sentence: Heavy rain flooded the coastal highway on Monday, forcing commuters onto mountain roads. Crews expect repairs to take two weeks.", "expected": ["highway"], "grader": "contains_all"}
+{"id": "math-2", "type": "math", "input": "A train travels at 60 km per hour for 2.5 hours. How far does it travel in kilometers?", "expected": "150"}
+{"id": "math-3", "type": "math", "input": "What is 15 percent of 200?", "expected": "30"}
+{"id": "math-4", "type": "math", "input": "A subscription costs $12 per month. If the price increases by 25 percent, what is the new monthly price in dollars?", "expected": "15"}
+{"id": "math-5", "type": "math", "input": "A warehouse ships 340 boxes per day. How many boxes does it ship in a 5-day work week?", "expected": "1700"}
+{"id": "math-6", "type": "math", "input": "Tom had 23 marbles. He lost 9 and then found 4 more. How many marbles does he have now?", "expected": "18"}
+{"id": "sent-1", "type": "sentiment", "input": "What is the sentiment of this review? Justify your answer in one sentence: 'Absolutely loved it, would buy again!'", "expected": ["positive"]}
+{"id": "sent-2", "type": "sentiment", "input": "What is the sentiment of this review? Justify your answer in one sentence: 'Terrible quality, broke after one day.'", "expected": ["negative"]}
+{"id": "sent-3", "type": "sentiment", "input": "What is the sentiment of this review? Justify your answer in one sentence: 'The packaging was nice but the product itself is useless.'", "expected": ["negative"]}
+{"id": "sent-4", "type": "sentiment", "input": "What is the sentiment of this review? Justify your answer in one sentence: 'The plot was slow at first, but the ending completely won me over.'", "expected": ["positive"]}
+{"id": "sent-5", "type": "sentiment", "input": "What is the sentiment of this review? Justify your answer in one sentence: 'The staff were rude and the food arrived cold.'", "expected": ["negative"]}
+{"id": "sum-1", "type": "summarization", "input": "Summarize in one sentence: The new library opened downtown on Saturday. Hundreds of residents attended the opening ceremony. The mayor called it the city's biggest investment in education this decade.", "expected": ["library"]}
+{"id": "sum-2", "type": "summarization", "input": "Summarize in one sentence: Heavy rain flooded the coastal highway on Monday, forcing commuters onto mountain roads. Crews expect repairs to take two weeks.", "expected": ["highway"]}
+{"id": "sum-3", "type": "summarization", "input": "Summarize the following in exactly two sentences: The community garden project started with six volunteers and a vacant lot. Three years later it feeds forty families and hosts weekly workshops. Organizers now plan to expand to two more neighborhoods next spring.", "expected": ["garden"]}
+{"id": "sum-4", "type": "summarization", "input": "Summarize the following in 3 bullet points: The city council approved the new bus routes on Tuesday. Service begins in March and adds coverage to the eastern districts. Fares will stay unchanged for the first year.", "expected": ["bus"]}
+{"id": "ner-1", "type": "ner", "input": "Extract all named entities (people, organizations, locations, dates) from this text: 'Amara Okafor visited Lagos on March 3, 2024, to meet executives from Swiftline Logistics.'", "expected": ["amara okafor", "lagos", "march 3, 2024", "swiftline"]}
+{"id": "ner-2", "type": "ner", "input": "Extract all named entities (people, organizations, locations, dates) from this text: 'On July 14, 2023, Elena Vasquez joined Northwind Analytics as head of research in Toronto.'", "expected": ["elena vasquez", "northwind", "toronto", "july 14, 2023"]}
+{"id": "ner-3", "type": "ner", "input": "Extract all named entities (people, organizations, locations, dates) from this text: 'The Riverside Museum in Glasgow reopened on 12 April 2021 after renovations led by architect Priya Nair.'", "expected": ["riverside museum", "glasgow", "12 april 2021", "priya nair"]}
+{"id": "logic-1", "type": "logic", "input": "Ali is taller than Ben. Ben is taller than Carl. Who is the shortest? Answer with the name.", "expected": "carl"}
+{"id": "logic-2", "type": "logic", "input": "If all bloops are razzies and all razzies are lazzies, are all bloops definitely lazzies? Answer yes or no.", "expected": "yes"}
+{"id": "logic-3", "type": "logic", "input": "Maya is older than Nina. Nina is older than Omar. Is Omar younger than Maya? Answer yes or no.", "expected": "yes"}
+{"id": "logic-4", "type": "logic", "input": "In a race, Priya finished before Quinn but after Ravi. Who finished first?", "expected": "ravi"}
+{"id": "logic-5", "type": "logic", "input": "A farmer keeps chickens and rabbits. Together they have 10 heads and 28 legs. How many rabbits are there?", "expected": "4", "grader": "numeric"}
+{"id": "dbg-1", "type": "code_debug", "input": "This Python function should return the sum of a list but raises a SyntaxError. Fix it:\ndef total(nums):\n    s = 0\n    for n in nums\n        s += n\n    return s", "expected": ["for n in nums:", "def total"]}
+{"id": "dbg-2", "type": "code_debug", "input": "This Python function should return the largest number in a list but always returns the first element. Fix it:\ndef largest(nums):\n    best = nums[0]\n    for n in nums:\n        if n < best:\n            best = n\n    return best", "expected": ["def largest", ">"]}
+{"id": "dbg-3", "type": "code_debug", "input": "This Python function should count vowels in a string but always returns 0. Fix it:\ndef count_vowels(s):\n    count = 0\n    for ch in s:\n        if ch in 'aeiou':\n            pass\n    return count", "expected": ["def count_vowels", "count += 1"]}
+{"id": "gen-1", "type": "code_gen", "input": "Write a Python function named is_palindrome(s) that returns True if the string s reads the same forwards and backwards, ignoring case.", "expected": ["def is_palindrome"]}
+{"id": "gen-2", "type": "code_gen", "input": "Write a Python function named fizzbuzz(n) that returns a list of strings for 1 to n where multiples of 3 are 'Fizz', multiples of 5 are 'Buzz', and multiples of both are 'FizzBuzz'.", "expected": ["def fizzbuzz"]}
+{"id": "gen-3", "type": "code_gen", "input": "Write a Python function named factorial(n) that returns the factorial of a non-negative integer n.", "expected": ["def factorial"]}

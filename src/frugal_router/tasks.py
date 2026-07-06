@@ -5,7 +5,16 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-TASK_TYPES = ("math", "mcq", "classification", "extraction", "summarization", "general")
+TASK_TYPES = (
+    "factual",
+    "math",
+    "sentiment",
+    "summarization",
+    "ner",
+    "logic",
+    "code_debug",
+    "code_gen",
+)
 
 _CHOICE_LETTERS = "ABCDE"
 

@@ -21,8 +21,9 @@ def test_grade_numeric_tolerates_formatting():
 
 
 def test_grade_exact_normalized():
-    task = Task(id="t", input="q", expected="Positive")
-    assert grade(task, "positive.", "classification") is True
+    task = Task(id="t", input="q", expected="Paris")
+    assert grade(task, "paris.", "factual") is True
+    assert grade(task, "London", "factual") is False
 
 
 def test_grade_contains_all():
@@ -33,7 +34,7 @@ def test_grade_contains_all():
 
 def test_grade_ungradable_returns_none():
     task = Task(id="t", input="q")
-    assert grade(task, "anything", "general") is None
+    assert grade(task, "anything", "factual") is None
 
 
 def test_run_eval_metrics_and_records(tmp_path):
