@@ -1,0 +1,45 @@
+# Kickoff-day swaps live here: local model file, remote model name, thresholds.
+# Everything else in the codebase is model-agnostic.
+
+local:
+  model_path: models/local.gguf
+  n_ctx: 8192
+  n_threads: 0        # 0 = library default
+  n_gpu_layers: 0     # raise when the scored environment has a GPU
+
+remote:
+  base_url: https://api.fireworks.ai/inference/v1
+  default_model: accounts/fireworks/models/llama-v3p1-8b-instruct
+  timeout_s: 60
+  max_retries: 2
+
+router:
+  weights: { agreement: 0.4, logprob: 0.2, verify: 0.2, predictor: 0.2 }
+  cache_path: artifacts/remote_cache.sqlite
+  predictor_path: artifacts/predictor.joblib
+
+policies:
+  defaults:
+    n_samples: 3
+    sample_temperature: 0.7
+    local_max_tokens: 512
+    escalation_threshold: 0.65
+    p_fail_cutoff: 0.65
+    remote_max_tokens: 32
+  per_type:
+    math:
+      n_samples: 5
+      remote_cot: true        # suppressing reasoning measurably hurts hard math
+      remote_max_tokens: 256
+    mcq:
+      remote_max_tokens: 4
+    classification:
+      remote_max_tokens: 8
+    extraction:
+      remote_max_tokens: 24
+    summarization:
+      n_samples: 1            # voting over free-form text does not converge
+      local_max_tokens: 256
+      remote_max_tokens: 96
+    general:
+      remote_max_tokens: 24

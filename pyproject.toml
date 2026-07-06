@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "frugal-router"
+version = "0.1.0"
+description = "Local-first cascade agent that answers with a free local model and spends remote tokens only when confidence is low"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Bisman Singh" }]
+dependencies = [
+    "pyyaml>=6.0",
+    "openai>=1.40",
+    "scikit-learn>=1.4",
+    "joblib>=1.3",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+local = ["llama-cpp-python>=0.3.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+frugal = "frugal_router.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/frugal_router"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

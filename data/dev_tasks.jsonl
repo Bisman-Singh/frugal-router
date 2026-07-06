@@ -1,0 +1,29 @@
+{"id": "math-1", "type": "math", "input": "A bakery sells muffins for $3 each. If Maria buys 7 muffins, how much does she pay in total?", "expected": "21"}
+{"id": "math-2", "type": "math", "input": "A train travels at 60 km per hour for 2.5 hours. How far does it travel?", "expected": "150"}
+{"id": "math-3", "type": "math", "input": "48 cookies are shared equally among 6 children. How many cookies does each child get?", "expected": "8"}
+{"id": "math-4", "type": "math", "input": "What is 15 percent of 200?", "expected": "30"}
+{"id": "math-5", "type": "math", "input": "Tom had 23 marbles. He lost 9 and then found 4 more. How many marbles does he have now?", "expected": "18"}
+{"id": "math-6", "type": "math", "input": "A rectangle is 12 meters long and 5 meters wide. What is its area in square meters?", "expected": "60"}
+{"id": "math-7", "type": "math", "input": "Three shirts cost $14 each. With a $10 discount on the total, how much do you pay?", "expected": "32"}
+{"id": "math-8", "type": "math", "input": "What is 124 + 387?", "expected": "511"}
+{"id": "mcq-1", "type": "mcq", "input": "Which planet is known as the Red Planet?", "choices": ["Venus", "Mars", "Jupiter", "Saturn"], "expected": "B"}
+{"id": "mcq-2", "type": "mcq", "input": "What is the capital of Japan?", "choices": ["Seoul", "Beijing", "Tokyo", "Bangkok"], "expected": "C"}
+{"id": "mcq-3", "type": "mcq", "input": "Which is the largest ocean on Earth?", "choices": ["Atlantic", "Indian", "Arctic", "Pacific"], "expected": "D"}
+{"id": "mcq-4", "type": "mcq", "input": "What is the chemical formula for water?", "choices": ["CO2", "H2O", "NaCl", "O2"], "expected": "B"}
+{"id": "mcq-5", "type": "mcq", "input": "Who wrote Romeo and Juliet?", "choices": ["Charles Dickens", "Jane Austen", "William Shakespeare", "Mark Twain"], "expected": "C"}
+{"id": "cls-1", "type": "classification", "input": "Classify the sentiment of this review as positive or negative: 'Absolutely loved it, would buy again!'", "expected": "positive"}
+{"id": "cls-2", "type": "classification", "input": "Classify the sentiment of this review as positive or negative: 'Terrible quality, broke after one day.'", "expected": "negative"}
+{"id": "cls-3", "type": "classification", "input": "Classify this email as spam or not spam: 'CONGRATULATIONS! You won $1,000,000. Click here NOW to claim.'", "expected": "spam"}
+{"id": "cls-4", "type": "classification", "input": "Classify the topic of this headline as sports, politics, or technology: 'Local team clinches championship in overtime thriller.'", "expected": "sports"}
+{"id": "cls-5", "type": "classification", "input": "Classify the sentiment of this review as positive or negative: 'The packaging was nice but the product itself is useless.'", "expected": "negative"}
+{"id": "ext-1", "type": "extraction", "context": "The Golden Gate Bridge opened in 1937 and spans 2737 meters across the strait connecting San Francisco Bay to the Pacific Ocean.", "input": "In what year did the Golden Gate Bridge open?", "expected": "1937"}
+{"id": "ext-2", "type": "extraction", "context": "Amara Okafor founded the logistics startup Swiftline in 2019 after leaving her job as a port operations manager in Lagos.", "input": "Who founded Swiftline?", "expected": "amara okafor"}
+{"id": "ext-3", "type": "extraction", "context": "The recipe calls for 250 grams of flour, two eggs, a pinch of salt, and 150 milliliters of milk, whisked until smooth.", "input": "How many grams of flour does the recipe call for?", "expected": "250"}
+{"id": "ext-4", "type": "extraction", "context": "The museum is open Tuesday through Sunday from 9 am to 5 pm, and admission is free on the first Saturday of every month.", "input": "On which day is the museum closed?", "expected": "monday"}
+{"id": "ext-5", "type": "extraction", "context": "Mount Kilimanjaro, the highest mountain in Africa, rises 5895 meters above sea level in northeastern Tanzania.", "input": "How tall is Mount Kilimanjaro in meters?", "expected": "5895"}
+{"id": "gen-1", "type": "general", "input": "What is the capital of France?", "expected": "paris"}
+{"id": "gen-2", "type": "general", "input": "How many days are there in a week?", "expected": "7"}
+{"id": "gen-3", "type": "general", "input": "What is the chemical symbol for gold?", "expected": "au"}
+{"id": "gen-4", "type": "general", "input": "Which planet in our solar system is the largest?", "expected": "jupiter"}
+{"id": "sum-1", "type": "summarization", "input": "Summarize in one sentence: The new library opened downtown on Saturday. Hundreds of residents attended the opening ceremony. The mayor called it the city's biggest investment in education this decade.", "expected": ["library"], "grader": "contains_all"}
+{"id": "sum-2", "type": "summarization", "input": "Summarize in one sentence: Heavy rain flooded the coastal highway on Monday, forcing commuters onto mountain roads. Crews expect repairs to take two weeks.", "expected": ["highway"], "grader": "contains_all"}
