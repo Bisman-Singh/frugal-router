@@ -75,25 +75,65 @@ def run_batch(
 
     if agent is not None:
         ordered = sorted(tasks, key=lambda t: _category_rank(classify(t)))
-        for index, task in enumerate(ordered):
-            now = time.monotonic()
-            if now >= deadline - HARD_STOP_MARGIN_S:
-                print(f"hard stop with {len(ordered) - index} tasks unsolved", file=sys.stderr)
-                break
-            mode = _mode(deadline - now, len(ordered) - index, scheduler)
-            try:
-                result = agent.solve(task, mode=mode)
-                answers[task.id] = result.answer
-            except Exception as exc:
-                # One bad task must never take down the batch.
-                print(f"task {task.id} failed: {type(exc).__name__}", file=sys.stderr)
-            _write_results(output_path, answers)
+        # A local llama context is single-threaded; pure remote solving is not.
+        workers = 1 if getattr(agent, "local", None) is not None else scheduler.max_workers
+        if workers > 1:
+            _run_parallel(agent, ordered, answers, output_path, deadline, scheduler, workers)
+        else:
+            _run_sequential(agent, ordered, answers, output_path, deadline, scheduler)
 
     _write_results(output_path, answers)
     summary = ledger.summary()
     summary["elapsed_s"] = round(time.monotonic() - started, 1)
     print(json.dumps(summary), file=sys.stderr)
     return 0
+
+
+def _run_sequential(agent, ordered, answers, output_path, deadline, scheduler) -> None:
+    for index, task in enumerate(ordered):
+        now = time.monotonic()
+        if now >= deadline - HARD_STOP_MARGIN_S:
+            print(f"hard stop with {len(ordered) - index} tasks unsolved", file=sys.stderr)
+            break
+        mode = _mode(deadline - now, len(ordered) - index, scheduler)
+        try:
+            answers[task.id] = agent.solve(task, mode=mode).answer
+        except Exception as exc:
+            # One bad task must never take down the batch.
+            print(f"task {task.id} failed: {type(exc).__name__}", file=sys.stderr)
+        _write_results(output_path, answers)
+
+
+def _run_parallel(agent, ordered, answers, output_path, deadline, scheduler, workers) -> None:
+    """Remote-only batches are network-bound; parallel calls keep a large task
+    file inside the 10-minute budget. Results are flushed as each completes,
+    and a hard timeout abandons in-flight tasks rather than the whole batch."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import TimeoutError as FuturesTimeout
+
+    remaining = deadline - HARD_STOP_MARGIN_S - time.monotonic()
+    if remaining <= 0:
+        print(f"hard stop with {len(ordered)} tasks unsolved", file=sys.stderr)
+        return
+    pool = ThreadPoolExecutor(max_workers=workers)
+    futures = {}
+    for index, task in enumerate(ordered):
+        mode = _mode(deadline - time.monotonic(), len(ordered) - index, scheduler)
+        futures[pool.submit(agent.solve, task, mode)] = task.id
+    try:
+        timeout = max(1.0, deadline - HARD_STOP_MARGIN_S - time.monotonic())
+        for done in as_completed(futures, timeout=timeout):
+            task_id = futures[done]
+            try:
+                answers[task_id] = done.result().answer
+            except Exception as exc:
+                print(f"task {task_id} failed: {type(exc).__name__}", file=sys.stderr)
+            _write_results(output_path, answers)
+    except FuturesTimeout:
+        unsolved = sum(1 for f in futures if not f.done())
+        print(f"hard stop with {unsolved} tasks in flight", file=sys.stderr)
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _read_tasks(input_path: str, answers: dict[str, str]) -> list[Task]:

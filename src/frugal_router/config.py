@@ -33,6 +33,7 @@ class SchedulerConfig:
     est_full_s: float = 40.0      # voting attempt on CPU
     est_greedy_s: float = 12.0    # single local sample
     est_remote_s: float = 5.0     # one proxied remote call
+    max_workers: int = 4          # parallel remote solving when no local model runs
 
 
 @dataclass

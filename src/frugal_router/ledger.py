@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 
@@ -11,12 +12,14 @@ class Ledger:
         if self._path:
             self._path.parent.mkdir(parents=True, exist_ok=True)
         self.entries: list[dict] = []
+        self._lock = threading.Lock()  # the harness may solve tasks in parallel
 
     def record(self, entry: dict) -> None:
-        self.entries.append(entry)
-        if self._path:
-            with open(self._path, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        with self._lock:
+            self.entries.append(entry)
+            if self._path:
+                with open(self._path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def summary(self) -> dict:
         total = len(self.entries)

@@ -32,6 +32,7 @@ scheduler:
   est_full_s: 40      # recalibrate against measured CPU throughput of the baked model
   est_greedy_s: 12
   est_remote_s: 5
+  max_workers: 4     # parallel remote calls when no local model is loaded
 
 # Per-category policy is the strongest routing signal: the 8 categories are
 # published, and each has its own local-vs-remote economics.
@@ -55,7 +56,7 @@ policies:
       n_samples: 5
       escalation_threshold: 0.7
       remote_cot: true        # suppressing reasoning measurably hurts hard math
-      remote_max_tokens: 300
+      remote_max_tokens: 512   # generous cap: truncation fails the judge, caps cost nothing
       # use_draft off: unproven vs reasoning remotes; enable only if a
       # non-reasoning harness model proves cheaper with drafts.
       remote_model_hints: [minimax, gemma]
@@ -77,7 +78,7 @@ policies:
       n_samples: 5
       escalation_threshold: 0.7
       remote_cot: true
-      remote_max_tokens: 250
+      remote_max_tokens: 512
       remote_model_hints: [minimax, gemma]
     code_debug:
       n_samples: 1
