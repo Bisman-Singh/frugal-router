@@ -1,12 +1,15 @@
 # frugal-router
 
-A local-first cascade agent for the AMD Developer Hackathon Act II, Track 1
-(Hybrid Token-Efficient Routing Agent). It answers every task with a free local
-model when it can prove to itself the answer is trustworthy, and spends remote
-Fireworks AI tokens only when it cannot. Built around one observation about the
-scoring rule. Local tokens count as zero, so the correct architecture is not a
-router that classifies tasks upfront but a cascade that always tries local
-first and escalates on measured low confidence.
+A confidence-driven routing agent for the AMD Developer Hackathon Act II,
+Track 1 (Hybrid Token-Efficient Routing Agent). Organizers clarified during
+the event that every scored answer must come from a Fireworks call through
+FIREWORKS_BASE_URL; local inference is free but cannot be the answer source.
+So the local model is the intelligence, not the mouthpiece. It classifies,
+drafts, and measures its own confidence for free, and that confidence decides
+how cheap the mandatory Fireworks call gets: a trusted draft rides along and
+the remote model confirms it in a handful of tokens, while an untrusted task
+gets a full remote solve with reasoning. The original zero-token local mode
+survives behind `router.answer_source: local` in case the ruling moves again.
 
 ## Scoring rule and strategy
 
@@ -30,10 +33,12 @@ minimal, and remote calls happen exactly once per escalated task.
       |                    early stop on unanimity
   confidence gate          agreement + pessimistic logprob quantile
       |                    (+ optional learned failure predictor)
-      +-- confident -----> emit local answer          0 remote tokens
+      +-- confident -----> ONE cheap Fireworks call: draft rides along,
+      |                    remote confirms in ~10 output tokens (no CoT bill)
       |
-      +-- not confident -> ONE Fireworks call         model resolved from
-              |            via FIREWORKS_BASE_URL     ALLOWED_MODELS at runtime
+      +-- not confident -> ONE full Fireworks call    model resolved from
+              |            (CoT where the category     ALLOWED_MODELS at runtime
+              |             needs it)
               +---------> emit judge-shaped answer
                            (malformed output repaired locally, never re-asked)
 /output/results.json       every task_id answered, always, exit 0
@@ -119,6 +124,10 @@ read from the environment at run time and override the config file.
 
 ## Compliance notes
 
+- Every scored answer originates from a Fireworks response
+  (`router.answer_source: fireworks`, the default). The local model only
+  classifies, drafts, compresses, and repairs formatting, per the organizer
+  clarification that all scoring inference goes through Fireworks.
 - No answers are hardcoded or cached anywhere. Every response is generated
   fresh per run, as the event rules require.
 - All remote calls go through `FIREWORKS_BASE_URL` with the harness-provided
