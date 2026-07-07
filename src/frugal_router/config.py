@@ -42,6 +42,7 @@ class Settings:
     policies: PolicyBook
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     weights: dict | None = None
+    answer_source: str = "fireworks"  # event rule: scored answers come from Fireworks
     predictor_path: str = "artifacts/predictor.joblib"
 
 
@@ -56,6 +57,7 @@ def load_settings(path: str | Path) -> Settings:
         policies=PolicyBook(policies_raw.get("defaults"), policies_raw.get("per_type")),
         scheduler=SchedulerConfig(**(raw.get("scheduler") or {})),
         weights=router.get("weights"),
+        answer_source=router.get("answer_source", "fireworks"),
         predictor_path=router.get("predictor_path", "artifacts/predictor.joblib"),
     )
 
@@ -107,6 +109,7 @@ def build_agent(settings: Settings, *, ledger=None):
         settings.policies,
         default_remote_model=settings.remote.default_model,
         allowed_models=allowed_models_from_env(),
+        answer_source=settings.answer_source,
         predictor=FailurePredictor.load(settings.predictor_path),
         ledger=ledger,
         weights=settings.weights,

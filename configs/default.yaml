@@ -19,6 +19,10 @@ remote:
 
 router:
   weights: { agreement: 0.6, logprob: 0.25, predictor: 0.15 }
+  # Organizer-clarified rule (Discord, Jul 2026): every scored answer must
+  # come from a Fireworks call. "local" mode (zero-token confident answers)
+  # is kept for development and in case the ruling changes again.
+  answer_source: fireworks
   predictor_path: artifacts/predictor.joblib
 
 # Wall-clock scheduler: the judging harness allows 600s for the whole batch.
@@ -51,6 +55,8 @@ policies:
       escalation_threshold: 0.7
       remote_cot: true        # suppressing reasoning measurably hurts hard math
       remote_max_tokens: 300
+      use_draft: true         # a trusted draft replaces ~300 CoT tokens with ~10
+      draft_max_tokens: 12
       remote_model_hints: [minimax, gemma]
     sentiment:
       n_samples: 3
@@ -71,6 +77,8 @@ policies:
       escalation_threshold: 0.7
       remote_cot: true
       remote_max_tokens: 250
+      use_draft: true
+      draft_max_tokens: 24
       remote_model_hints: [minimax, gemma]
     code_debug:
       n_samples: 1

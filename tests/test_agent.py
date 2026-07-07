@@ -7,13 +7,14 @@ from frugal_router.tasks import Task
 MATH = Task(id="m1", input="What is 12 + 7?", type="math")
 
 
-def make_agent(local, remote, *, per_type=None, ledger=None):
+def make_agent(local, remote, *, per_type=None, ledger=None, answer_source="local"):
     defaults = {"n_samples": 3, "escalation_threshold": 0.6}
     return RoutingAgent(
         local,
         remote,
         PolicyBook(defaults, per_type),
         default_remote_model="test-model",
+        answer_source=answer_source,
         ledger=ledger,
     )
 
@@ -129,6 +130,37 @@ def test_remote_direct_mode_skips_local():
     result = make_agent(local, remote).solve(MATH, mode="remote_direct")
     assert result.source == "remote"
     assert local.calls == []
+
+
+def test_fireworks_mode_confirms_confident_draft_remotely():
+    local = MockLocalBackend(["Answer: 19"])
+    remote = MockRemoteBackend(["19"])
+    agent = make_agent(
+        local, remote, per_type={"math": {"use_draft": True}}, answer_source="fireworks"
+    )
+    result = agent.solve(MATH)
+    assert result.source == "remote"  # scored answer originates from Fireworks
+    assert result.answer == "19"
+    assert result.remote_prompt_tokens > 0
+    assert "Draft answer: 19" in remote.calls[0]["user"]
+    assert "draft_confirm" in result.decision_path
+
+
+def test_fireworks_mode_low_confidence_solves_remotely_without_draft():
+    local = MockLocalBackend([["Answer: 19", "Answer: 3", "Answer: 7"]])
+    remote = MockRemoteBackend(["19"])
+    agent = make_agent(local, remote, answer_source="fireworks")
+    result = agent.solve(MATH)
+    assert result.source == "remote"
+    assert "Draft answer" not in remote.calls[0]["user"]
+
+
+def test_fireworks_mode_remote_failure_still_falls_back_to_local():
+    local = MockLocalBackend(["Answer: 19"])
+    remote = MockRemoteBackend(fail=True)
+    result = make_agent(local, remote, answer_source="fireworks").solve(MATH)
+    assert result.source == "fallback"
+    assert result.answer == "19"
 
 
 def test_remote_direct_with_dead_remote_makes_late_local_attempt():

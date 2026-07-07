@@ -40,6 +40,7 @@ class RoutingAgent:
         *,
         default_remote_model: str = "",
         allowed_models: list[str] | None = None,
+        answer_source: str = "local",
         predictor=None,
         ledger: Ledger | None = None,
         weights: dict | None = None,
@@ -49,6 +50,10 @@ class RoutingAgent:
         self.policies = policies
         self.default_remote_model = default_remote_model
         self.allowed_models = allowed_models or []
+        # "local": a confident local answer is emitted directly (zero tokens).
+        # "fireworks": every scored answer originates from a Fireworks call
+        # (event rule); confidence instead decides how cheap that call is.
+        self.answer_source = answer_source
         self.predictor = predictor
         self.ledger = ledger
         self.weights = weights
@@ -76,14 +81,16 @@ class RoutingAgent:
             except Exception as exc:
                 path.append(f"local_error:{type(exc).__name__}")
 
-        if report is not None and not self._should_escalate(report, policy, path):
+        confident = report is not None and not self._should_escalate(report, policy, path)
+        if confident and self.answer_source == "local":
             return self._finish(
                 task, task_type, local_answer or "", "local", report, local_answer, 0, 0, path
             )
 
         pt = ct = 0
         try:
-            answer, pt, ct = self._remote_answer(task, task_type, policy, path)
+            draft = local_answer if (confident and policy.use_draft) else None
+            answer, pt, ct = self._remote_answer(task, task_type, policy, path, draft=draft)
             if (answer or "").strip():
                 return self._finish(
                     task, task_type, answer, "remote", report, local_answer, pt, ct, path
@@ -163,7 +170,7 @@ class RoutingAgent:
         if report.score < policy.escalation_threshold:
             path.append(f"escalate:score={report.score:.2f}<{policy.escalation_threshold}")
             return True
-        path.append("accept_local")
+        path.append("local_confident")
         return False
 
     # -- remote ----------------------------------------------------------
@@ -178,7 +185,7 @@ class RoutingAgent:
         return self._remote_answer(task, task_type, policy, [])
 
     def _remote_answer(
-        self, task: Task, task_type: str, policy: Policy, path: list[str]
+        self, task: Task, task_type: str, policy: Policy, path: list[str], draft: str | None = None
     ) -> tuple[str, int, int]:
         if self.remote is None:
             raise RuntimeError("no remote backend configured")
@@ -190,7 +197,15 @@ class RoutingAgent:
             if compressed:
                 path.append("compressed_context")
         question = prompts.question_text(task.rendered_input(), context)
-        prompt = prompts.remote_solve(question, task_type, cot=policy.remote_cot)
+        if draft:
+            # A trusted draft turns the call into a cheap confirmation: the
+            # model outputs the answer without paying for its own reasoning.
+            prompt = prompts.remote_with_draft(question, task_type, draft)
+            max_tokens = max(policy.draft_max_tokens, len(draft) // 3 + 8)
+            path.append("draft_confirm")
+        else:
+            prompt = prompts.remote_solve(question, task_type, cot=policy.remote_cot)
+            max_tokens = policy.remote_max_tokens
         model = policy.remote_model or pick_model(
             self.allowed_models, policy.remote_model_hints, self.default_remote_model
         )
@@ -198,7 +213,7 @@ class RoutingAgent:
             raise RuntimeError("no remote model configured")
 
         gen = self.remote.generate(
-            None, prompt, model=model, temperature=0.0, max_tokens=policy.remote_max_tokens
+            None, prompt, model=model, temperature=0.0, max_tokens=max_tokens
         )
         path.append(f"remote:{model}")
         if gen.finish_reason == "length":
