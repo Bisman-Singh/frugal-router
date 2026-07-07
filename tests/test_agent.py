@@ -131,6 +131,31 @@ def test_remote_direct_mode_skips_local():
     assert local.calls == []
 
 
+def test_remote_direct_with_dead_remote_makes_late_local_attempt():
+    local = MockLocalBackend(["Answer: 19"])
+    remote = MockRemoteBackend(fail=True)
+    result = make_agent(local, remote).solve(MATH, mode="remote_direct")
+    assert result.source == "fallback"
+    assert result.answer == "19"
+    assert "late_local_attempt" in result.decision_path
+
+
+def test_empty_remote_answer_falls_back_to_local_candidate():
+    local = MockLocalBackend([["Answer: 19", "Answer: 3", "Answer: 7"]])
+    remote = MockRemoteBackend(["   "])
+    result = make_agent(local, remote).solve(MATH)
+    assert result.source == "fallback"
+    assert result.answer == "19"
+    assert "remote_empty" in result.decision_path
+
+
+def test_truncated_remote_response_is_flagged():
+    local = MockLocalBackend([["Answer: 1", "Answer: 2", "Answer: 3"], "Answer: 42"])
+    remote = MockRemoteBackend(["Answer: 4"], finish_reason="length")
+    result = make_agent(local, remote).solve(MATH)
+    assert "remote_truncated" in result.decision_path
+
+
 def test_pick_model_resolves_against_allowed_list():
     from frugal_router.agent import pick_model
 

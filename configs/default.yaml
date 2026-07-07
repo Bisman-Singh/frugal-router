@@ -11,7 +11,9 @@ remote:
   # FIREWORKS_BASE_URL and FIREWORKS_API_KEY env vars override at runtime;
   # the judging harness injects both and all calls must go through them.
   base_url: https://api.fireworks.ai/inference/v1
-  default_model: accounts/fireworks/models/llama-v3p1-8b-instruct
+  # Intentionally empty: model IDs must come from the ALLOWED_MODELS env var,
+  # never from code or config (event rule). For dev, export ALLOWED_MODELS.
+  default_model: ""
   timeout_s: 25       # the harness allows 30s per request
   max_retries: 1      # transport failures only; a retry that reaches the proxy bills twice
 
@@ -23,9 +25,9 @@ router:
 # Estimates are per-task CPU costs used to pick full / greedy / remote_direct.
 scheduler:
   time_budget_s: 570
-  est_full_s: 25
-  est_greedy_s: 9
-  est_remote_s: 4
+  est_full_s: 40      # recalibrate against measured CPU throughput of the baked model
+  est_greedy_s: 12
+  est_remote_s: 5
 
 # Per-category policy is the strongest routing signal: the 8 categories are
 # published, and each has its own local-vs-remote economics.

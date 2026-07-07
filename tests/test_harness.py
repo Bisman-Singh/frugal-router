@@ -76,12 +76,27 @@ def test_missing_prompt_field_yields_empty_answer_entry(tmp_path):
     assert "task-2" in ids  # the dict without a task_id got a synthetic one
 
 
-def test_scheduler_degrades_to_remote_direct_when_out_of_time(tmp_path):
+def test_scheduler_degrades_when_short_on_time(tmp_path):
     tasks = [{"task_id": str(i), "prompt": f"question {i}"} for i in range(5)]
     out = str(tmp_path / "results.json")
     agent = StubAgent()
-    run_batch(write_tasks(tmp_path, tasks), out, agent=agent, time_budget_s=0.0)
-    assert {c["mode"] for c in agent.calls} == {"remote_direct"}
+    run_batch(write_tasks(tmp_path, tasks), out, agent=agent, time_budget_s=25.0)
+    modes = [c["mode"] for c in agent.calls]
+    assert modes[0] == "remote_direct"  # 25s across 5 tasks cannot afford local
+    assert "full" not in modes
+    # As instant tasks free up budget the scheduler may recover to greedy;
+    # that is intended behavior, not a bug.
+
+
+def test_hard_stop_flushes_valid_output_without_solving(tmp_path):
+    tasks = [{"task_id": str(i), "prompt": f"question {i}"} for i in range(3)]
+    out = str(tmp_path / "results.json")
+    agent = StubAgent()
+    assert run_batch(write_tasks(tmp_path, tasks), out, agent=agent, time_budget_s=0.0) == 0
+    assert agent.calls == []  # past the hard stop before the first task
+    results = read_results(out)
+    assert len(results) == 3
+    assert all(r["answer"] == "" for r in results)
 
 
 def test_scheduler_uses_full_mode_with_generous_budget(tmp_path):

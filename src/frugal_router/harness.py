@@ -2,17 +2,19 @@
 
 Contract from the official guide: the container reads [{"task_id", "prompt"}]
 on startup, writes [{"task_id", "answer"}] before exiting, exit code 0, whole
-batch within 10 minutes. A missing or invalid output file scores zero, so this
-module never crashes and never writes partial output: every task_id gets an
-answer entry no matter what fails in between.
+batch within 10 minutes. A missing or invalid output file scores zero, so a
+valid results file is written atomically after every solved task; a kill at
+any moment leaves the best answers so far, never nothing.
 
 The binding constraint is the wall clock, not local tokens. The scheduler
-banks cheap categories first and degrades the strategy (voting, then single
-greedy local, then one direct remote call) as the remaining budget shrinks.
+banks cheap categories first, degrades the strategy (voting, then single
+greedy local, then one direct remote call) as the budget shrinks, and hard
+stops with enough margin to flush the output.
 """
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -35,6 +37,8 @@ CATEGORY_ORDER = [
     "code_gen",
 ]
 
+HARD_STOP_MARGIN_S = 15.0  # stop solving this long before the deadline
+
 
 def run_batch(
     input_path: str = "/input/tasks.json",
@@ -48,19 +52,23 @@ def run_batch(
     answers: dict[str, str] = {}
 
     tasks = _read_tasks(input_path, answers)
+    _write_results(output_path, answers)  # a valid file exists from second one
     if not tasks:
-        _write_results(output_path, answers)
         return 0
 
     scheduler = SchedulerConfig()
     ledger = Ledger()
+    settings = None
     try:
         settings = load_settings(config_path)
         scheduler = settings.scheduler
-        if agent is None:
-            agent = build_agent(settings, ledger=ledger)
     except Exception as exc:
-        print(f"setup degraded: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(f"config degraded: {type(exc).__name__}: {exc}", file=sys.stderr)
+    if agent is None and settings is not None:
+        try:
+            agent = build_agent(settings, ledger=ledger)
+        except Exception as exc:
+            print(f"agent setup failed: {type(exc).__name__}: {exc}", file=sys.stderr)
 
     budget = time_budget_s if time_budget_s is not None else scheduler.time_budget_s
     deadline = started + budget
@@ -68,13 +76,18 @@ def run_batch(
     if agent is not None:
         ordered = sorted(tasks, key=lambda t: _category_rank(classify(t)))
         for index, task in enumerate(ordered):
-            mode = _mode(deadline - time.monotonic(), len(ordered) - index, scheduler)
+            now = time.monotonic()
+            if now >= deadline - HARD_STOP_MARGIN_S:
+                print(f"hard stop with {len(ordered) - index} tasks unsolved", file=sys.stderr)
+                break
+            mode = _mode(deadline - now, len(ordered) - index, scheduler)
             try:
                 result = agent.solve(task, mode=mode)
                 answers[task.id] = result.answer
             except Exception as exc:
                 # One bad task must never take down the batch.
                 print(f"task {task.id} failed: {type(exc).__name__}", file=sys.stderr)
+            _write_results(output_path, answers)
 
     _write_results(output_path, answers)
     summary = ledger.summary()
@@ -102,10 +115,13 @@ def _read_tasks(input_path: str, answers: dict[str, str]) -> list[Task]:
 
 
 def _write_results(output_path: str, answers: dict[str, str]) -> None:
+    """Atomic write: the file on disk is always complete, valid JSON."""
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     results = [{"task_id": task_id, "answer": answer} for task_id, answer in answers.items()]
-    path.write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _category_rank(category: str) -> int:

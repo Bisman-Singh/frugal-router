@@ -42,8 +42,10 @@ class FireworksBackend:
             max_tokens=max_tokens,
         )
         usage = resp.usage
+        choice = resp.choices[0]
         return Generation(
-            text=resp.choices[0].message.content or "",
+            text=choice.message.content or "",
             prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
             completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+            finish_reason=choice.finish_reason or "",
         )

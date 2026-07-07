@@ -62,6 +62,7 @@ class LlamaLocalBackend:
                     token_logprobs=_token_logprobs(choice),
                     prompt_tokens=usage.get("prompt_tokens", 0),
                     completion_tokens=usage.get("completion_tokens", 0),
+                    finish_reason=choice.get("finish_reason") or "",
                 )
             )
         return generations

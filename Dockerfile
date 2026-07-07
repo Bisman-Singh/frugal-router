@@ -5,7 +5,6 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY configs ./configs
-COPY data ./data
 COPY scripts ./scripts
 
 # Prebuilt CPU wheels avoid compiling llama.cpp inside the image.
