@@ -33,8 +33,10 @@ minimal, and remote calls happen exactly once per escalated task.
       |                    early stop on unanimity
   confidence gate          agreement + pessimistic logprob quantile
       |                    (+ optional learned failure predictor)
-      +-- confident -----> ONE cheap Fireworks call: draft rides along,
-      |                    remote confirms in ~10 output tokens (no CoT bill)
+      +-- confident -----> ONE cheap Fireworks call: draft rides along and the
+      |                    remote confirms in ~10 output tokens (use_draft per
+      |                    category; pays off only against non-reasoning models,
+      |                    so measure before enabling)
       |
       +-- not confident -> ONE full Fireworks call    model resolved from
               |            (CoT where the category     ALLOWED_MODELS at runtime
@@ -146,7 +148,7 @@ both Gemma. See `configs/default.yaml`.
 ## Tests
 
 ```bash
-.venv/bin/pytest -q   # 66 tests, all offline via mock backends
+.venv/bin/pytest -q   # 73 tests, all offline via mock backends
 ```
 
 ## License
