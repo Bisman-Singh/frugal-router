@@ -42,26 +42,27 @@ policies:
     local_max_tokens: 512
     escalation_threshold: 0.6
     p_fail_cutoff: 0.65
-    remote_max_tokens: 64
+    remote_max_tokens: 512   # a cap, not a cost; only tokens actually emitted bill
+    remote_reasoning_effort: low  # cheap for reasoning harness models (minimax); ignored by non-reasoning ones
     # Substrings matched against the runtime ALLOWED_MODELS list, in order.
     remote_model_hints: [gemma]
   per_type:
     factual:
       n_samples: 3
       escalation_threshold: 0.55
-      remote_max_tokens: 40
+      remote_max_tokens: 96
     math:
       n_samples: 5
       escalation_threshold: 0.7
       remote_cot: true        # suppressing reasoning measurably hurts hard math
       remote_max_tokens: 300
-      use_draft: true         # a trusted draft replaces ~300 CoT tokens with ~10
-      draft_max_tokens: 12
+      # use_draft off: unproven vs reasoning remotes; enable only if a
+      # non-reasoning harness model proves cheaper with drafts.
       remote_model_hints: [minimax, gemma]
     sentiment:
       n_samples: 3
       escalation_threshold: 0.5
-      remote_max_tokens: 60
+      remote_max_tokens: 96
     summarization:
       n_samples: 1            # voting over free-form text does not converge
       local_max_tokens: 400
@@ -71,14 +72,12 @@ policies:
     ner:
       n_samples: 1
       escalation_threshold: 0.45
-      remote_max_tokens: 120
+      remote_max_tokens: 200
     logic:
       n_samples: 5
       escalation_threshold: 0.7
       remote_cot: true
       remote_max_tokens: 250
-      use_draft: true
-      draft_max_tokens: 24
       remote_model_hints: [minimax, gemma]
     code_debug:
       n_samples: 1

@@ -20,6 +20,9 @@ policies:
     n_samples: 1
     remote_max_tokens: 2048
     remote_reasoning_effort: low   # gpt-oss/reasoning models: cut hidden reasoning
+    # use_draft measured WORSE on reasoning dev model (adds prompt tokens, no CoT
+    # to skip). Only wins vs non-reasoning remotes (real Gemma). Off by default.
+    use_draft: false
   per_type:
     factual:      { remote_max_tokens: 2048 }
     math:         { remote_max_tokens: 2048 }
