@@ -1,0 +1,30 @@
+# Dev-only: serverless models available on a personal Fireworks key are mostly
+# REASONING models (gpt-oss, glm, deepseek) that spend completion tokens on
+# hidden reasoning, so budgets here are large. The real harness ALLOWED_MODELS
+# (gemma-4-31b-it etc.) are non-reasoning; production budgets live in default.yaml.
+local:
+  model_path: models/local.gguf   # absent in dev -> all-remote solve
+
+remote:
+  base_url: https://api.fireworks.ai/inference/v1
+  default_model: ""
+  timeout_s: 60
+  max_retries: 1
+
+router:
+  answer_source: fireworks
+  weights: { agreement: 0.6, logprob: 0.25, predictor: 0.15 }
+
+policies:
+  defaults:
+    n_samples: 1
+    remote_max_tokens: 2048
+  per_type:
+    factual:      { remote_max_tokens: 2048 }
+    math:         { remote_max_tokens: 2048 }
+    sentiment:    { remote_max_tokens: 2048 }
+    summarization: { remote_max_tokens: 2048, allow_compression: false }
+    ner:          { remote_max_tokens: 2048 }
+    logic:        { remote_max_tokens: 2048 }
+    code_debug:   { remote_max_tokens: 2048 }
+    code_gen:     { remote_max_tokens: 2048 }

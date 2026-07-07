@@ -24,9 +24,9 @@ def extract_answer(text: str | None) -> str | None:
         return None
     matches = _ANSWER_LINE.findall(text)
     if matches:
-        return matches[-1].strip()
+        return strip_md(matches[-1]).strip()
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
-    return lines[-1] if lines else None
+    return strip_md(lines[-1]).strip() if lines else None
 
 
 def normalize_number(raw: str | None) -> str | None:
@@ -44,10 +44,19 @@ def normalize_number(raw: str | None) -> str | None:
     return str(int(value)) if value.is_integer() else str(value)
 
 
+_MD = re.compile(r"[*_`#]+")
+
+
+def strip_md(raw: str) -> str:
+    return _MD.sub("", raw)
+
+
 def text_key(raw: str | None) -> str | None:
     if raw is None:
         return None
-    key = re.sub(r"\s+", " ", raw).strip().strip('"').strip("'").rstrip(".").casefold()
+    # Normalize unicode spaces (models emit narrow/no-break spaces) to ASCII.
+    raw = raw.replace(" ", " ").replace(" ", " ")
+    key = strip_md(re.sub(r"\s+", " ", raw)).strip().strip('"').strip("'").strip().rstrip(".").casefold()
     return key or None
 
 
