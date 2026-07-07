@@ -81,17 +81,30 @@ class RoutingAgent:
                 task, task_type, local_answer or "", "local", report, local_answer, 0, 0, path
             )
 
+        pt = ct = 0
         try:
             answer, pt, ct = self._remote_answer(task, task_type, policy, path)
-            return self._finish(
-                task, task_type, answer, "remote", report, local_answer, pt, ct, path
-            )
+            if (answer or "").strip():
+                return self._finish(
+                    task, task_type, answer, "remote", report, local_answer, pt, ct, path
+                )
+            path.append("remote_empty")  # an empty answer must not beat a local one
         except Exception as exc:
             path.append(f"remote_error:{type(exc).__name__}")
-            path.append("fallback")
-            return self._finish(
-                task, task_type, local_answer or "", "fallback", report, local_answer, 0, 0, path
-            )
+
+        if not local_answer and self.local is not None:
+            # Last-ditch free attempt: a low-confidence local answer still beats "".
+            try:
+                _, local_answer = self._local_attempt(
+                    task, task_type, replace(policy, n_samples=1), path
+                )
+                path.append("late_local_attempt")
+            except Exception:
+                pass
+        path.append("fallback")
+        return self._finish(
+            task, task_type, local_answer or "", "fallback", report, local_answer, pt, ct, path
+        )
 
     # -- local -----------------------------------------------------------
 
@@ -111,7 +124,7 @@ class RoutingAgent:
             temperature=policy.sample_temperature if window > 1 else 0.0,
             max_tokens=policy.local_max_tokens,
         )
-        keys = [vote_key(g.text, task_type) for g in gens]
+        keys = _vote_keys(gens, task_type)
         candidate, agreement = vote(keys)
         if agreement < 1.0 and policy.n_samples > window:
             extra = self.local.generate(
@@ -122,7 +135,7 @@ class RoutingAgent:
                 max_tokens=policy.local_max_tokens,
             )
             gens += extra
-            keys += [vote_key(g.text, task_type) for g in extra]
+            keys += _vote_keys(extra, task_type)
             candidate, agreement = vote(keys)
 
         best = _representative(gens, keys, candidate)
@@ -188,6 +201,8 @@ class RoutingAgent:
             None, prompt, model=model, temperature=0.0, max_tokens=policy.remote_max_tokens
         )
         path.append(f"remote:{model}")
+        if gen.finish_reason == "length":
+            path.append("remote_truncated")  # billed in full, answer likely judge-failing
         answer = self._parse_remote(gen.text, task_type, path)
         return answer, gen.prompt_tokens, gen.completion_tokens
 
@@ -256,6 +271,18 @@ def pick_model(allowed: list[str], hints: list[str], fallback: str) -> str:
     return fallback if fallback in allowed else allowed[0]
 
 
+def _vote_keys(gens, task_type):
+    """Truncated samples must not win the vote; their key is unusable."""
+    return [
+        None if g.finish_reason == "length" else vote_key(g.text, task_type) for g in gens
+    ]
+
+
+def _rank_by_confidence(gen) -> float:
+    quantile = logprob_quantile(gen.token_logprobs)
+    return quantile if quantile is not None else float("-inf")
+
+
 def _representative(gens, keys, candidate):
     """The candidate-matching sample with the most confident answer tokens."""
     if candidate is None:
@@ -263,10 +290,7 @@ def _representative(gens, keys, candidate):
     matching = [g for g, k in zip(gens, keys) if k == candidate]
     if not matching:
         return gens[0] if gens else None
-    return max(
-        matching,
-        key=lambda g: logprob_quantile(g.token_logprobs) or float("-inf"),
-    )
+    return max(matching, key=_rank_by_confidence)
 
 
 def _best_logprob(gens, keys, candidate) -> float | None:

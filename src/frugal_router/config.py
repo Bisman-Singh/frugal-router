@@ -30,9 +30,9 @@ class RemoteConfig:
 @dataclass
 class SchedulerConfig:
     time_budget_s: float = 570.0  # the harness allows 600s for the whole batch
-    est_full_s: float = 25.0      # voting attempt on CPU
-    est_greedy_s: float = 9.0     # single local sample
-    est_remote_s: float = 4.0     # one proxied remote call
+    est_full_s: float = 40.0      # voting attempt on CPU
+    est_greedy_s: float = 12.0    # single local sample
+    est_remote_s: float = 5.0     # one proxied remote call
 
 
 @dataclass
@@ -75,15 +75,21 @@ def build_agent(settings: Settings, *, ledger=None):
 
     local = None
     if settings.local.model_path and Path(settings.local.model_path).exists():
-        from .backends.llama_local import LlamaLocalBackend
+        # A broken local backend must never take the remote path down with it.
+        try:
+            from .backends.llama_local import LlamaLocalBackend
 
-        local = LlamaLocalBackend(
-            model_path=settings.local.model_path,
-            n_ctx=settings.local.n_ctx,
-            n_threads=settings.local.n_threads or None,
-            n_gpu_layers=settings.local.n_gpu_layers,
-            chat_format=settings.local.chat_format,
-        )
+            local = LlamaLocalBackend(
+                model_path=settings.local.model_path,
+                n_ctx=settings.local.n_ctx,
+                n_threads=settings.local.n_threads or None,
+                n_gpu_layers=settings.local.n_gpu_layers,
+                chat_format=settings.local.chat_format,
+            )
+        except Exception as exc:
+            import sys
+
+            print(f"local backend unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
 
     remote = None
     if os.environ.get("FIREWORKS_API_KEY"):

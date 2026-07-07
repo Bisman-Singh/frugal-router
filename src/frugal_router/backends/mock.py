@@ -31,7 +31,12 @@ class MockLocalBackend:
         while len(texts) < n:
             texts.append(texts[-1])
         return [
-            Generation(text=t, token_logprobs=self.token_logprobs, completion_tokens=len(t) // 4)
+            Generation(
+                text=t,
+                token_logprobs=self.token_logprobs,
+                completion_tokens=len(t) // 4,
+                finish_reason="stop",
+            )
             for t in texts[:n]
         ]
 
@@ -43,11 +48,13 @@ class MockRemoteBackend:
         prompt_tokens: int = 40,
         completion_tokens: int = 6,
         fail: bool = False,
+        finish_reason: str = "stop",
     ):
         self._replies = list(replies or ["Answer: 42"])
         self.prompt_tokens = prompt_tokens
         self.completion_tokens = completion_tokens
         self.fail = fail
+        self.finish_reason = finish_reason
         self.calls: list[dict] = []
 
     def generate(self, system, user, *, model, temperature=0.0, max_tokens=64):
@@ -59,4 +66,5 @@ class MockRemoteBackend:
             text=reply,
             prompt_tokens=self.prompt_tokens,
             completion_tokens=self.completion_tokens,
+            finish_reason=self.finish_reason,
         )

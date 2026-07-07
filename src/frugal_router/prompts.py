@@ -21,7 +21,7 @@ def local_solve(
     contract = contract_for(category)
     system = (
         f"You are an expert at {category} tasks. Work carefully. "
-        f"{contract.local_instruction}"
+        f"Respond in English. {contract.local_instruction}"
     )
     parts = []
     for example in few_shot or []:

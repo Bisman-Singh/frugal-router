@@ -11,6 +11,7 @@ class Generation:
     token_logprobs: list[float] | None = None
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    finish_reason: str = ""  # "length" means truncated at max_tokens
 
 
 @runtime_checkable
