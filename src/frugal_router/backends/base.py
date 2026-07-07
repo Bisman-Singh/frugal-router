@@ -41,4 +41,5 @@ class RemoteBackend(Protocol):
         model: str,
         temperature: float = 0.0,
         max_tokens: int = 64,
+        reasoning_effort: str = "",
     ) -> Generation: ...

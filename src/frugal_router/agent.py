@@ -213,7 +213,8 @@ class RoutingAgent:
             raise RuntimeError("no remote model configured")
 
         gen = self.remote.generate(
-            None, prompt, model=model, temperature=0.0, max_tokens=max_tokens
+            None, prompt, model=model, temperature=0.0, max_tokens=max_tokens,
+            reasoning_effort=policy.remote_reasoning_effort,
         )
         path.append(f"remote:{model}")
         if gen.finish_reason == "length":

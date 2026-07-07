@@ -20,6 +20,7 @@ class Policy:
     remote_model_hints: list = field(default_factory=list)  # substrings, in preference order
     remote_max_tokens: int = 32
     remote_cot: bool = False
+    remote_reasoning_effort: str = ""  # "low"/"medium"/"high" for reasoning models
     use_draft: bool = False  # confident local draft rides along for cheap confirmation
     draft_max_tokens: int = 16
     always_remote: bool = False
