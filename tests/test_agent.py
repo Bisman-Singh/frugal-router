@@ -115,6 +115,35 @@ def test_ledger_records_and_totals():
     assert summary["remote_prompt_tokens"] == 0
 
 
+def test_greedy_mode_forces_single_sample():
+    local = MockLocalBackend(["Answer: 19"])
+    agent = make_agent(local, MockRemoteBackend(), per_type={"math": {"n_samples": 5}})
+    result = agent.solve(MATH, mode="greedy")
+    assert result.source == "local"
+    assert local.calls[0]["n"] == 1
+
+
+def test_remote_direct_mode_skips_local():
+    local = MockLocalBackend(["Answer: 19"])
+    remote = MockRemoteBackend(["19"])
+    result = make_agent(local, remote).solve(MATH, mode="remote_direct")
+    assert result.source == "remote"
+    assert local.calls == []
+
+
+def test_pick_model_resolves_against_allowed_list():
+    from frugal_router.agent import pick_model
+
+    allowed = [
+        "accounts/fireworks/models/minimax-m3",
+        "accounts/fireworks/models/gemma-4-31b-it",
+    ]
+    assert pick_model(allowed, ["gemma"], "fallback") == allowed[1]
+    assert pick_model(allowed, ["kimi", "minimax"], "fallback") == allowed[0]
+    assert pick_model(allowed, ["nope"], "fallback") == allowed[0]
+    assert pick_model([], ["gemma"], "fallback") == "fallback"
+
+
 def test_adaptive_sampling_stops_early_on_unanimity():
     local = MockLocalBackend([["Answer: 19", "Answer: 19", "Answer: 19"]])
     agent = make_agent(local, MockRemoteBackend(), per_type={"math": {"n_samples": 5}})

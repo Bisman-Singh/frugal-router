@@ -13,8 +13,8 @@ class FireworksBackend:
         self,
         api_key: str | None = None,
         base_url: str = DEFAULT_BASE_URL,
-        timeout: float = 60.0,
-        max_retries: int = 2,
+        timeout: float = 25.0,
+        max_retries: int = 1,
     ):
         from openai import OpenAI
 
@@ -23,8 +23,11 @@ class FireworksBackend:
             raise RuntimeError(
                 "FIREWORKS_API_KEY is not set. Export it or put it in the environment."
             )
+        # The judging harness routes and records all traffic through its own
+        # base URL; calls that bypass it invalidate the submission.
+        resolved_base = os.environ.get("FIREWORKS_BASE_URL") or base_url
         self._client = OpenAI(
-            api_key=key, base_url=base_url, timeout=timeout, max_retries=max_retries
+            api_key=key, base_url=resolved_base, timeout=timeout, max_retries=max_retries
         )
 
     def generate(self, system, user, *, model, temperature=0.0, max_tokens=64):

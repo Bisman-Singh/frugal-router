@@ -5,7 +5,7 @@ the best local answer. The agent always returns an answer.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from . import prompts
 from .classify import classify
@@ -39,6 +39,7 @@ class RoutingAgent:
         policies: PolicyBook,
         *,
         default_remote_model: str = "",
+        allowed_models: list[str] | None = None,
         predictor=None,
         ledger: Ledger | None = None,
         weights: dict | None = None,
@@ -47,22 +48,28 @@ class RoutingAgent:
         self.remote = remote
         self.policies = policies
         self.default_remote_model = default_remote_model
+        self.allowed_models = allowed_models or []
         self.predictor = predictor
         self.ledger = ledger
         self.weights = weights
 
-    def solve(self, task: Task) -> SolveResult:
+    def solve(self, task: Task, mode: str = "full") -> SolveResult:
+        """mode is the scheduler's degradation lever: "full" allows voting,
+        "greedy" forces a single local sample, "remote_direct" skips local."""
         path: list[str] = []
         task_type = classify(task)
         path.append(f"type:{task_type}")
         policy = self.policies.for_type(task_type)
+        if mode == "greedy" and policy.n_samples > 1:
+            policy = replace(policy, n_samples=1)
+            path.append("scheduler:greedy")
 
         report = None
         local_answer = None
         if self.local is None:
             path.append("no_local_backend")
-        elif policy.always_remote:
-            path.append("policy:always_remote")
+        elif policy.always_remote or mode == "remote_direct":
+            path.append("skip_local:policy" if policy.always_remote else "skip_local:scheduler")
         else:
             try:
                 report, local_answer = self._local_attempt(task, task_type, policy, path)
@@ -171,7 +178,9 @@ class RoutingAgent:
                 path.append("compressed_context")
         question = prompts.question_text(task.rendered_input(), context)
         prompt = prompts.remote_solve(question, task_type, cot=policy.remote_cot)
-        model = policy.remote_model or self.default_remote_model
+        model = policy.remote_model or pick_model(
+            self.allowed_models, policy.remote_model_hints, self.default_remote_model
+        )
         if not model:
             raise RuntimeError("no remote model configured")
 
@@ -230,6 +239,21 @@ class RoutingAgent:
                 entry["confidence"] = report.to_dict()
             self.ledger.record(entry)
         return result
+
+
+def pick_model(allowed: list[str], hints: list[str], fallback: str) -> str:
+    """Resolve the escalation model against the runtime ALLOWED_MODELS list.
+
+    Model IDs must never be hardcoded (guide rule), so hints are substrings
+    matched against whatever the harness injects.
+    """
+    if not allowed:
+        return fallback
+    for hint in hints:
+        for model in allowed:
+            if hint.lower() in model.lower():
+                return model
+    return fallback if fallback in allowed else allowed[0]
 
 
 def _representative(gens, keys, candidate):

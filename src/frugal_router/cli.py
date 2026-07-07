@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 
@@ -11,8 +12,15 @@ def main(argv=None) -> int:
         prog="frugal",
         description="Local-first cascade agent: free local answers, minimal remote tokens.",
     )
-    parser.add_argument("--config", default="configs/default.yaml")
+    parser.add_argument(
+        "--config", default=os.environ.get("FRUGAL_CONFIG", "configs/default.yaml")
+    )
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("harness", help="judging-harness mode: tasks.json in, results.json out")
+    p.add_argument("--input", default="/input/tasks.json")
+    p.add_argument("--output", default="/output/results.json")
+    p.add_argument("--time-budget", type=float, default=None)
 
     p = sub.add_parser("solve", help="solve a single task from the command line")
     p.add_argument("--input", required=True)
@@ -48,6 +56,16 @@ def main(argv=None) -> int:
 
 
 def _dispatch(args) -> int:
+    if args.command == "harness":
+        from .harness import run_batch
+
+        return run_batch(
+            args.input,
+            args.output,
+            config_path=args.config,
+            time_budget_s=args.time_budget,
+        )
+
     from .config import build_agent, load_settings
 
     settings = load_settings(args.config)

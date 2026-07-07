@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -23,8 +23,16 @@ class LocalConfig:
 class RemoteConfig:
     base_url: str = "https://api.fireworks.ai/inference/v1"
     default_model: str = ""
-    timeout_s: float = 60.0
-    max_retries: int = 2
+    timeout_s: float = 25.0
+    max_retries: int = 1
+
+
+@dataclass
+class SchedulerConfig:
+    time_budget_s: float = 570.0  # the harness allows 600s for the whole batch
+    est_full_s: float = 25.0      # voting attempt on CPU
+    est_greedy_s: float = 9.0     # single local sample
+    est_remote_s: float = 4.0     # one proxied remote call
 
 
 @dataclass
@@ -32,6 +40,7 @@ class Settings:
     local: LocalConfig
     remote: RemoteConfig
     policies: PolicyBook
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     weights: dict | None = None
     predictor_path: str = "artifacts/predictor.joblib"
 
@@ -45,9 +54,17 @@ def load_settings(path: str | Path) -> Settings:
         local=LocalConfig(**(raw.get("local") or {})),
         remote=RemoteConfig(**(raw.get("remote") or {})),
         policies=PolicyBook(policies_raw.get("defaults"), policies_raw.get("per_type")),
+        scheduler=SchedulerConfig(**(raw.get("scheduler") or {})),
         weights=router.get("weights"),
         predictor_path=router.get("predictor_path", "artifacts/predictor.joblib"),
     )
+
+
+def allowed_models_from_env() -> list[str]:
+    """The judging harness injects ALLOWED_MODELS as a comma-separated list.
+    Model IDs must come from here, never from code (guide rule)."""
+    raw = os.environ.get("ALLOWED_MODELS", "")
+    return [m.strip() for m in raw.split(",") if m.strip()]
 
 
 def build_agent(settings: Settings, *, ledger=None):
@@ -83,6 +100,7 @@ def build_agent(settings: Settings, *, ledger=None):
         remote,
         settings.policies,
         default_remote_model=settings.remote.default_model,
+        allowed_models=allowed_models_from_env(),
         predictor=FailurePredictor.load(settings.predictor_path),
         ledger=ledger,
         weights=settings.weights,

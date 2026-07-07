@@ -13,8 +13,13 @@ RUN pip install --no-cache-dir . && \
     pip install --no-cache-dir llama-cpp-python \
       --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 
-# Mount or bake the GGUF at models/local.gguf (see scripts/download_model.sh).
-# FIREWORKS_API_KEY comes from the environment at run time, never from the image.
+# The GGUF must be baked into the image before submission: the judging harness
+# gives the container no network time for downloads inside its 60s readiness
+# window. Run scripts/download_model.sh before docker build.
+COPY models ./models
+
+# FIREWORKS_API_KEY, FIREWORKS_BASE_URL, and ALLOWED_MODELS are injected by the
+# judging harness at run time; nothing secret lives in the image.
 
 ENTRYPOINT ["frugal"]
-CMD ["--help"]
+CMD ["harness"]
