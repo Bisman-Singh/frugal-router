@@ -23,7 +23,7 @@ footer: 'Frugal Router · AMD Developer Hackathon Act II · Track 1'
 
 ## A Token-Efficient AI Agent
 
-Bisman Singh
+Bisman Singh · Chirag Sharma
 AMD Developer Hackathon Act II · Track 1
 
 ---
@@ -88,6 +88,23 @@ Measured on a live Fireworks evaluation, not guessed.
 - **Parallel remote calls** so a large batch clears the ten minute budget
 - **Answer contracts** shaped for the intent judge, never bare labels
 - **Nothing cached or hardcoded**, every answer generated fresh
+
+---
+
+## Live run, the real submission image
+
+```
+$ docker run --rm -e FIREWORKS_API_KEY -e ALLOWED_MODELS \
+    -v ./in:/input -v ./out:/output \
+    bismansinghmadaan/frugal-router:v1
+
+[ {"task_id":"a","answer":"36"},
+  {"task_id":"b","answer":"Negative: the praise for the display is
+     outweighed by the battery dying by noon."},
+  {"task_id":"c","answer":"def add(a, b):\n    return a + b"} ]
+```
+
+Math is right, sentiment carries its justification, code runs. Valid file, clean exit.
 
 ---
 

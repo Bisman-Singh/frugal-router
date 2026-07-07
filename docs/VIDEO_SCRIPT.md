@@ -1,5 +1,8 @@
 # Video presentation script and storyboard
 
+Team: Bisman Singh and Chirag Sharma.
+
+
 Target length 2 to 3 minutes. Record with QuickTime, Loom, or OBS. Upload to
 YouTube or Loom and paste the link into the lablab "Video Presentation" field.
 
