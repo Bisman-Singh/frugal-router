@@ -16,6 +16,14 @@ _ANSWER_LINE = re.compile(r"(?im)^\s*(?:final\s+)?answer\s*[:=]\s*(.+?)\s*$")
 _NUMBER = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 _SENTIMENT_LABEL = re.compile(r"(?i)\b(positive|negative|neutral|mixed)\b")
 _CODE_SHAPE = re.compile(r"```|\bdef\s+\w|\bclass\s+\w|\bfunction\b|\breturn\b")
+_THINK_BLOCK = re.compile(r"(?s)<think>.*?(?:</think>\s*|$)")
+_PYTHON_FENCE = re.compile(r"```(?:python|py)\s*\n(.*?)```", re.S)
+
+
+def strip_think(text: str) -> str:
+    """Reasoning models can leak <think> blocks into content; they are never
+    part of the answer."""
+    return _THINK_BLOCK.sub("", text)
 
 
 def extract_answer(text: str | None) -> str | None:
@@ -64,6 +72,7 @@ def vote_key(text: str | None, category: str) -> str | None:
     """Normalized comparison key for self-consistency voting."""
     if not text:
         return None
+    text = strip_think(text)
     if category == "math":
         return normalize_number(extract_answer(text))
     if category == "sentiment":
@@ -76,6 +85,8 @@ def vote_key(text: str | None, category: str) -> str | None:
 
 def final_answer(text: str | None, category: str) -> str | None:
     """The answer actually emitted, shaped for an intent judge."""
+    if text:
+        text = strip_think(text)
     if not text or not text.strip():
         return None
     if category == "math":
@@ -96,5 +107,18 @@ def is_valid_answer(answer: str | None, category: str) -> bool:
         # A label alone is not intent-complete; the justification must be there.
         return bool(_SENTIMENT_LABEL.search(answer)) and len(answer.split()) >= 4
     if category in ("code_debug", "code_gen"):
-        return bool(_CODE_SHAPE.search(answer))
+        return bool(_CODE_SHAPE.search(answer)) and _python_fences_parse(answer)
+    return True
+
+
+def _python_fences_parse(answer: str) -> bool:
+    """A fenced block explicitly marked python must at least be valid syntax.
+    Unmarked or non-python code is not judged here."""
+    import ast
+
+    for block in _PYTHON_FENCE.findall(answer):
+        try:
+            ast.parse(block)
+        except SyntaxError:
+            return False
     return True

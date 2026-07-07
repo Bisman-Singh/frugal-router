@@ -23,6 +23,10 @@ router:
   # come from a Fireworks call. "local" mode (zero-token confident answers)
   # is kept for development and in case the ruling changes again.
   answer_source: fireworks
+  # Deterministic prove-or-defer solvers for pure-computation math/logic:
+  # "confirm" = exact answer rides as a draft in a tiny Fireworks call,
+  # "direct" = emit at zero tokens (only if organizers bless it), "off".
+  solver_mode: confirm
   predictor_path: artifacts/predictor.joblib
 
 # Wall-clock scheduler: the judging harness allows 600s for the whole batch.

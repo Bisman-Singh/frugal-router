@@ -15,6 +15,7 @@ from .contracts import STYLE_LINE, style_of
 from .extract import final_answer, is_valid_answer, vote_key
 from .ledger import Ledger
 from .policy import Policy, PolicyBook
+from .solvers import solve as deterministic_solve
 from .tasks import Task
 
 
@@ -41,6 +42,7 @@ class RoutingAgent:
         default_remote_model: str = "",
         allowed_models: list[str] | None = None,
         answer_source: str = "local",
+        solver_mode: str = "confirm",  # confirm | direct | off
         predictor=None,
         ledger: Ledger | None = None,
         weights: dict | None = None,
@@ -54,6 +56,7 @@ class RoutingAgent:
         # "fireworks": every scored answer originates from a Fireworks call
         # (event rule); confidence instead decides how cheap that call is.
         self.answer_source = answer_source
+        self.solver_mode = solver_mode
         self.predictor = predictor
         self.ledger = ledger
         self.weights = weights
@@ -68,6 +71,27 @@ class RoutingAgent:
         if mode == "greedy" and policy.n_samples > 1:
             policy = replace(policy, n_samples=1)
             path.append("scheduler:greedy")
+
+        # Deterministic prove-or-defer tier: pure computation answered exactly
+        # by code, then confirmed by a tiny Fireworks call.
+        if self.solver_mode != "off" and task_type in ("math", "logic"):
+            exact = deterministic_solve(task.rendered_input(), task_type)
+            if exact is not None:
+                path.append("deterministic")
+                if self.solver_mode == "direct" or self.remote is None:
+                    return self._finish(task, task_type, exact, "local", None, exact, 0, 0, path)
+                try:
+                    answer, pt, ct = self._remote_answer(
+                        task, task_type, replace(policy, remote_cot=False), path, draft=exact
+                    )
+                    if "remote_truncated" in path:
+                        answer = exact  # the proven draft beats a cut-off confirmation
+                    return self._finish(
+                        task, task_type, answer or exact, "remote", None, exact, pt, ct, path
+                    )
+                except Exception as exc:
+                    path.append(f"remote_error:{type(exc).__name__}")
+                    return self._finish(task, task_type, exact, "fallback", None, exact, 0, 0, path)
 
         # In fireworks mode the local attempt only earns its cost if a confident
         # draft would ride along; without drafting it changes nothing, so skip it.
@@ -218,10 +242,23 @@ class RoutingAgent:
         if not model:
             raise RuntimeError("no remote model configured")
 
-        gen = self.remote.generate(
-            None, prompt, model=model, temperature=0.0, max_tokens=max_tokens,
-            reasoning_effort=policy.remote_reasoning_effort,
-        )
+        try:
+            gen = self.remote.generate(
+                None, prompt, model=model, temperature=0.0, max_tokens=max_tokens,
+                reasoning_effort=policy.remote_reasoning_effort,
+            )
+        except Exception:
+            # One shot on a different allowed model before giving up: a single
+            # 5xx-ing model must not decide the task.
+            alternates = [m for m in usable_models(self.allowed_models) if m != model]
+            if not alternates:
+                raise
+            model = alternates[0]
+            path.append(f"failover:{model}")
+            gen = self.remote.generate(
+                None, prompt, model=model, temperature=0.0, max_tokens=max_tokens,
+                reasoning_effort=policy.remote_reasoning_effort,
+            )
         path.append(f"remote:{model}")
         if gen.finish_reason == "length":
             path.append("remote_truncated")  # billed in full, answer likely judge-failing
@@ -278,12 +315,26 @@ class RoutingAgent:
         return result
 
 
+# ALLOWED_MODELS can contain non-chat models (an image model appeared in one
+# leaked list); routing a category to one of these zeroes the category.
+_NON_CHAT_HINTS = (
+    "embed", "rerank", "whisper", "audio", "tts", "image", "vision",
+    "moderation", "guard", "clip", "diffusion", "flux",
+)
+
+
+def usable_models(allowed: list[str]) -> list[str]:
+    usable = [m for m in allowed if not any(b in m.lower() for b in _NON_CHAT_HINTS)]
+    return usable or list(allowed)
+
+
 def pick_model(allowed: list[str], hints: list[str], fallback: str) -> str:
     """Resolve the escalation model against the runtime ALLOWED_MODELS list.
 
     Model IDs must never be hardcoded (guide rule), so hints are substrings
     matched against whatever the harness injects.
     """
+    allowed = usable_models(allowed)
     if not allowed:
         return fallback
     for hint in hints:
