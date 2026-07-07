@@ -7,7 +7,8 @@ from frugal_router.tasks import Task
 MATH = Task(id="m1", input="What is 12 + 7?", type="math")
 
 
-def make_agent(local, remote, *, per_type=None, ledger=None, answer_source="local"):
+def make_agent(local, remote, *, per_type=None, ledger=None, answer_source="local",
+               solver_mode="off"):
     defaults = {"n_samples": 3, "escalation_threshold": 0.6}
     return RoutingAgent(
         local,
@@ -15,6 +16,7 @@ def make_agent(local, remote, *, per_type=None, ledger=None, answer_source="loca
         PolicyBook(defaults, per_type),
         default_remote_model="test-model",
         answer_source=answer_source,
+        solver_mode=solver_mode,
         ledger=ledger,
     )
 
@@ -130,6 +132,52 @@ def test_remote_direct_mode_skips_local():
     result = make_agent(local, remote).solve(MATH, mode="remote_direct")
     assert result.source == "remote"
     assert local.calls == []
+
+
+def test_deterministic_confirm_mode_sends_exact_draft():
+    remote = MockRemoteBackend(["511"])
+    agent = make_agent(None, remote, solver_mode="confirm")
+    result = agent.solve(Task(id="d1", input="What is 124 + 387?", type="math"))
+    assert result.source == "remote"
+    assert result.answer == "511"
+    assert "deterministic" in result.decision_path
+    assert "Draft answer: 511" in remote.calls[0]["user"]
+
+
+def test_deterministic_direct_mode_costs_zero_tokens():
+    remote = MockRemoteBackend()
+    agent = make_agent(None, remote, solver_mode="direct")
+    result = agent.solve(Task(id="d2", input="What is 15 percent of 200?", type="math"))
+    assert result.source == "local"
+    assert result.answer == "30"
+    assert result.remote_prompt_tokens == 0
+    assert remote.calls == []
+
+
+def test_deterministic_falls_back_to_exact_answer_when_remote_dies():
+    agent = make_agent(None, MockRemoteBackend(fail=True), solver_mode="confirm")
+    result = agent.solve(Task(id="d3", input="What is 124 + 387?", type="math"))
+    assert result.source == "fallback"
+    assert result.answer == "511"
+
+
+def test_solver_defers_word_problems_to_models():
+    local = MockLocalBackend(["Answer: 21"])
+    agent = make_agent(local, MockRemoteBackend(), solver_mode="confirm")
+    task = Task(id="d4", input="Muffins cost $3 each. Maria buys 7. What does she pay?", type="math")
+    result = agent.solve(task)
+    assert "deterministic" not in result.decision_path
+
+
+def test_non_chat_models_filtered_and_failover_works():
+    from frugal_router.agent import pick_model, usable_models
+
+    allowed = [
+        "accounts/fireworks/models/flux-1-schnell-fp8",
+        "accounts/fireworks/models/gemma-4-31b-it",
+    ]
+    assert usable_models(allowed) == [allowed[1]]
+    assert pick_model(allowed, [], "fb") == allowed[1]
 
 
 def test_fireworks_mode_confirms_confident_draft_remotely():

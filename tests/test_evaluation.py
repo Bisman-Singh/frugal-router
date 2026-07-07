@@ -11,6 +11,7 @@ def make_agent(local, remote):
         remote,
         PolicyBook({"n_samples": 1, "escalation_threshold": 0.6}),
         default_remote_model="test-model",
+        solver_mode="off",
     )
 
 
