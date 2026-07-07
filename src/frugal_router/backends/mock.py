@@ -57,10 +57,12 @@ class MockRemoteBackend:
         self.finish_reason = finish_reason
         self.calls: list[dict] = []
 
-    def generate(self, system, user, *, model, temperature=0.0, max_tokens=64):
+    def generate(self, system, user, *, model, temperature=0.0, max_tokens=64,
+                 reasoning_effort=""):
         if self.fail:
             raise RuntimeError("mock remote backend down")
-        self.calls.append({"system": system, "user": user, "model": model, "max_tokens": max_tokens})
+        self.calls.append({"system": system, "user": user, "model": model,
+                           "max_tokens": max_tokens, "reasoning_effort": reasoning_effort})
         reply = self._replies.pop(0) if len(self._replies) > 1 else self._replies[0]
         return Generation(
             text=reply,

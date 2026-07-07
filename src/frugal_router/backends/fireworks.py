@@ -30,16 +30,23 @@ class FireworksBackend:
             api_key=key, base_url=resolved_base, timeout=timeout, max_retries=max_retries
         )
 
-    def generate(self, system, user, *, model, temperature=0.0, max_tokens=64):
+    def generate(self, system, user, *, model, temperature=0.0, max_tokens=64,
+                 reasoning_effort=""):
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": user})
+        extra = {}
+        if reasoning_effort:
+            # Reasoning models (gpt-oss, minimax) bill hidden reasoning tokens;
+            # capping the effort is the single biggest completion-token saver.
+            extra["reasoning_effort"] = reasoning_effort
         resp = self._client.chat.completions.create(
             model=model,
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            extra_body=extra or None,
         )
         usage = resp.usage
         choice = resp.choices[0]

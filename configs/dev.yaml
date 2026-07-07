@@ -19,6 +19,7 @@ policies:
   defaults:
     n_samples: 1
     remote_max_tokens: 2048
+    remote_reasoning_effort: low   # gpt-oss/reasoning models: cut hidden reasoning
   per_type:
     factual:      { remote_max_tokens: 2048 }
     math:         { remote_max_tokens: 2048 }
