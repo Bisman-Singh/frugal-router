@@ -9,3 +9,6 @@ artifacts/
 .DS_Store
 dist/
 *.egg-info/
+
+# Internal strategy notes, never committed
+PLAYBOOK.md
