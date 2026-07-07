@@ -4,11 +4,16 @@ from frugal_router.harness import run_batch
 
 
 class StubAgent:
-    """Records solve() calls; answers with the task id so ordering is visible."""
+    """Records solve() calls; answers with the task id so ordering is visible.
+
+    Has a truthy `local` so the harness runs it sequentially (deterministic
+    call order for assertions). ParallelStub flips that off.
+    """
 
     def __init__(self, fail_ids=()):
         self.calls = []
         self.fail_ids = set(fail_ids)
+        self.local = "stub-local"
 
     def solve(self, task, mode="full"):
         self.calls.append({"id": task.id, "mode": mode})
@@ -105,3 +110,29 @@ def test_scheduler_uses_full_mode_with_generous_budget(tmp_path):
     agent = StubAgent()
     run_batch(write_tasks(tmp_path, tasks), out, agent=agent, time_budget_s=600)
     assert agent.calls[0]["mode"] == "full"
+
+
+class ParallelStub(StubAgent):
+    def __init__(self, fail_ids=()):
+        super().__init__(fail_ids)
+        self.local = None  # no local model -> harness parallelizes
+
+
+def test_parallel_batch_answers_every_task(tmp_path):
+    tasks = [{"task_id": str(i), "prompt": f"question {i}"} for i in range(8)]
+    out = str(tmp_path / "results.json")
+    agent = ParallelStub()
+    assert run_batch(write_tasks(tmp_path, tasks), out, agent=agent, time_budget_s=600) == 0
+    results = {r["task_id"]: r["answer"] for r in read_results(out)}
+    assert len(results) == 8
+    assert all(v.startswith("answer-") for v in results.values())
+    assert len(agent.calls) == 8
+
+
+def test_parallel_failure_is_isolated(tmp_path):
+    tasks = [{"task_id": "a", "prompt": "q"}, {"task_id": "b", "prompt": "q"}]
+    out = str(tmp_path / "results.json")
+    run_batch(write_tasks(tmp_path, tasks), out, agent=ParallelStub(fail_ids={"a"}), time_budget_s=600)
+    results = {r["task_id"]: r["answer"] for r in read_results(out)}
+    assert results["a"] == ""
+    assert results["b"] == "answer-b"
