@@ -23,8 +23,8 @@ def grade(task: Task, answer: str | None, task_type: str) -> bool | None:
     grader = task.grader or _default_grader(task, task_type)
     if grader == "contains_all":
         expected = task.expected if isinstance(task.expected, list) else [task.expected]
-        hay = str(answer).casefold()
-        return all(str(kw).casefold() in hay for kw in expected)
+        hay = _norm_spaces(str(answer)).casefold()
+        return all(_norm_spaces(str(kw)).casefold() in hay for kw in expected)
     if grader == "numeric":
         expected_num = normalize_number(str(task.expected))
         answer_num = normalize_number(str(answer))
@@ -40,13 +40,21 @@ def grade(task: Task, answer: str | None, task_type: str) -> bool | None:
     return expected_key is not None and expected_key == text_key(str(answer))
 
 
+def _norm_spaces(s: str) -> str:
+    import re
+
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def _default_grader(task: Task, task_type: str) -> str:
     if isinstance(task.expected, list):
         return "contains_all"
     if task_type == "math":
         return "numeric"
-    if task_type in ("factual", "logic"):
+    if task_type == "logic":
         return "exact"
+    # factual and others: the real gate is an intent judge, so a correct value
+    # inside a fuller sentence must count as correct.
     return "contains_all"
 
 
