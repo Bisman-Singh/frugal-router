@@ -21,6 +21,7 @@ class LlamaLocalBackend:
             n_threads=n_threads or None,
             n_gpu_layers=n_gpu_layers,
             chat_format=chat_format,  # None = use the template from GGUF metadata
+            logits_all=True,  # required for per-token logprobs in the chat API
             verbose=False,
         )
         self.n_ctx = n_ctx

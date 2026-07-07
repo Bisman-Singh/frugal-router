@@ -69,12 +69,18 @@ class RoutingAgent:
             policy = replace(policy, n_samples=1)
             path.append("scheduler:greedy")
 
+        # In fireworks mode the local attempt only earns its cost if a confident
+        # draft would ride along; without drafting it changes nothing, so skip it.
+        local_useful = self.answer_source == "local" or policy.use_draft
+
         report = None
         local_answer = None
         if self.local is None:
             path.append("no_local_backend")
         elif policy.always_remote or mode == "remote_direct":
             path.append("skip_local:policy" if policy.always_remote else "skip_local:scheduler")
+        elif not local_useful:
+            path.append("skip_local:no_draft")
         else:
             try:
                 report, local_answer = self._local_attempt(task, task_type, policy, path)
