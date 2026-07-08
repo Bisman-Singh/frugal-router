@@ -15,7 +15,7 @@ remote:
 
 router:
   answer_source: fireworks
-  solver_mode: direct    # deterministic math/logic answers, proven correct, 0 tokens
+  solver_mode: off       # v6: EVERY task through Fireworks (guide: all inference via FIREWORKS_BASE_URL)
   weights: { agreement: 0.6, logprob: 0.25, predictor: 0.15 }
   predictor_path: artifacts/predictor.joblib
 
