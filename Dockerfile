@@ -22,4 +22,4 @@ COPY models ./models
 # judging harness at run time; nothing secret lives in the image.
 
 ENTRYPOINT ["frugal"]
-CMD ["harness"]
+CMD ["simple"]
