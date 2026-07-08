@@ -85,9 +85,9 @@ def test_scheduler_degrades_when_short_on_time(tmp_path):
     tasks = [{"task_id": str(i), "prompt": f"question {i}"} for i in range(5)]
     out = str(tmp_path / "results.json")
     agent = StubAgent()
-    run_batch(write_tasks(tmp_path, tasks), out, agent=agent, time_budget_s=25.0)
+    run_batch(write_tasks(tmp_path, tasks), out, agent=agent, time_budget_s=18.0)
     modes = [c["mode"] for c in agent.calls]
-    assert modes[0] == "remote_direct"  # 25s across 5 tasks cannot afford local up front
+    assert modes[0] == "remote_direct"  # 30s (minus 15s margin) across 5 tasks cannot afford local up front
     # As instant (stub) tasks free up budget the scheduler recovers toward local;
     # with real slow local tasks the budget would keep shrinking. Both are intended.
 
