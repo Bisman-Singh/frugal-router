@@ -51,7 +51,7 @@ policies:
     remote_max_tokens: 512   # a cap, not a cost; only tokens actually emitted bill
     remote_reasoning_effort: low  # cheap for reasoning harness models (minimax); ignored by non-reasoning ones
     # Substrings matched against the runtime ALLOWED_MODELS list, in order.
-    remote_model_hints: [gemma]
+    remote_model_hints: [gemma-4-31b-it, gemma]
   per_type:
     factual:
       n_samples: 3
@@ -64,7 +64,7 @@ policies:
       remote_max_tokens: 512   # generous cap: truncation fails the judge, caps cost nothing
       # use_draft off: unproven vs reasoning remotes; enable only if a
       # non-reasoning harness model proves cheaper with drafts.
-      remote_model_hints: [minimax, gemma]
+      remote_model_hints: [minimax, gemma-4-31b-it, gemma]
     sentiment:
       n_samples: 3
       escalation_threshold: 0.5
@@ -84,16 +84,16 @@ policies:
       escalation_threshold: 0.7
       remote_cot: true
       remote_max_tokens: 512
-      remote_model_hints: [minimax, gemma]
+      remote_model_hints: [minimax, gemma-4-31b-it, gemma]
     code_debug:
       n_samples: 1
       local_max_tokens: 768
       escalation_threshold: 0.6
       remote_max_tokens: 600
-      remote_model_hints: [code, kimi, gemma]
+      remote_model_hints: [kimi-k2p7-code, code, kimi, gemma-4-31b-it]
     code_gen:
       n_samples: 1
       local_max_tokens: 768
       escalation_threshold: 0.6
       remote_max_tokens: 600
-      remote_model_hints: [code, kimi, gemma]
+      remote_model_hints: [kimi-k2p7-code, code, kimi, gemma-4-31b-it]
