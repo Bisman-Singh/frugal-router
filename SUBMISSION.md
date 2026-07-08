@@ -1,57 +1,58 @@
 # Submission checklist (lablab.ai, Track 1)
 
-Deadline: Saturday, July 11, 2026, 16:00 UTC. Submissions are rate-limited to
-10 per hour per team, and the leaderboard ranks by tokens among submissions
-that pass the accuracy gate, so submit a safe baseline early and iterate.
+Deadline: Saturday, July 11, 2026, 16:00 UTC. Resubmission is 10/hour, and the
+leaderboard ranks by tokens among submissions that pass the accuracy gate.
+
+## Docker image (mandatory field)
+
+Primary (aggressive, local-first, ~half the field's tokens):
+```
+docker.io/bismansinghmadaan/frugal-router:v4
+```
+Fallback if v4 returns ACCURACY_GATE_FAILED (safe, 100% accuracy):
+```
+docker.io/bismansinghmadaan/frugal-router:v3
+```
+Both are public, linux/amd64, under the 10GB limit (v4 2.2GB, v3 0.7GB).
 
 ## Basic information
 
-- **Project title**: frugal-router: a local-first cascade that spends remote
-  tokens only when it must
-- **Short description** (draft): A hybrid routing agent that answers with a
-  free local Gemma model when self-consistency and logprob signals prove the
-  answer trustworthy, and makes exactly one Fireworks call when they do not.
-  Wall-clock aware, judge-shaped answers, zero cached responses.
-- **Long description**: expand from README sections "Scoring rule and
-  strategy" and "Architecture". Include the measured numbers from the final
-  eval run (accuracy per category, escalation rate, total remote tokens) once
-  the operating point is locked.
-- **Tags**: AI Agents, Routing, llama.cpp, Fireworks AI, Gemma, Token
-  Efficiency, Python, Docker
+- **Title**: `Frugal Router, a Token-Efficient AI Agent`
+- **Short description**:
+  > A general-purpose AI agent that answers eight task categories using the fewest Fireworks tokens possible. A small local model and deterministic solvers answer what they reliably can at zero tokens; only the hard cases escalate to Fireworks AI.
+- **Long description**: see docs/deck.md story; full text in the git history of this file.
+- **Event track**: Track 1 — Hybrid Token-Efficient Routing Agent (only that one)
+- **Technologies**: Gemma, OpenAI (SDK), Qwen (local model), and add custom
+  tag "Fireworks AI"; Docker/Python/llama.cpp if free-text tags are allowed.
+- **Categories**: Developer Tools, Utility and Tools, Project FromScratch
+
+## Application (Step 3)
+
+- **GitHub Repository**: `https://github.com/Bisman-Singh/frugal-router`
+- **Demo Application Platform**: Other
+- **Demo Application URL**: `https://hub.docker.com/r/bismansinghmadaan/frugal-router`
+- **Additional Information**:
+  > Frugal Router is a containerized batch agent, not a hosted web app, so the demo is the public Docker image the judging harness runs.
+  >
+  > docker pull bismansinghmadaan/frugal-router:v4
+  >
+  > docker run --rm -e FIREWORKS_API_KEY -e FIREWORKS_BASE_URL -e ALLOWED_MODELS -v ./in:/input:ro -v ./out:/output bismansinghmadaan/frugal-router:v4
+  >
+  > It reads /input/tasks.json, answers each task with a local model, deterministic solvers, or a Fireworks call as cheaply as possible, and writes /output/results.json. Local and deterministic answers cost zero Fireworks tokens. A narrated walkthrough is at docs/frugal-router-video.mp4 and slides at docs/frugal-router-slides.pdf.
 
 ## Media
 
-- **Cover image**: a diagram of the cascade (local attempt, confidence gate,
-  single escalation). Keep the token counter visible.
-- **Video presentation**: 2 to 3 minutes. Suggested cuts: the scoring rule and
-  why cascade beats pre-routing (30s), live run of the container on a task
-  file with the ledger output (60s), the sweep plot showing the chosen
-  operating point on the accuracy/token frontier (30s), Gemma-everywhere
-  story for the partner prize (20s).
-- **Slides**: problem, scoring asymmetry, architecture diagram, confidence
-  stack evidence, results table, compliance notes.
+- **Cover image**: docs/cover.png
+- **Slides**: docs/frugal-router-slides.pdf
+- **Video**: docs/frugal-router-video.mp4 — upload to YouTube/Loom, paste link.
+  NOTE: the current deck/video describe the earlier Fireworks-first strategy;
+  regenerate for the v4 local-first story if you want full consistency (matters
+  mainly for the human-judged Gemma prize, not the leaderboard rank).
 
-## Code and hosting
+## Pre-submit verification (done 2026-07-08)
 
-- **Public GitHub repository**: push this repo public. README already covers
-  setup and usage (submission requirement). Verify no `.env`, no keys, no
-  cluster data in history before flipping to public.
-- **Demo**: the Docker image on a public registry is the deliverable the
-  judging harness pulls. `docker buildx build --platform linux/amd64` is
-  mandatory, the judging VM is linux/amd64 and a missing manifest scores zero.
-- **Application URL**: the public registry image URL (plus the repo).
-
-## Pre-submit verification (every submission)
-
-1. `bash scripts/download_model.sh` so the GGUF is baked in. No downloads at
-   startup, the container must be ready within 60 seconds.
-2. `docker buildx build --platform linux/amd64 -t <registry>/frugal-router:vN .`
-3. Compressed image size under 10GB (`docker images`).
-4. Clean-machine pull test: `docker pull` then run with a sample
-   `/input/tasks.json` and dummy env vars. Confirm `/output/results.json` is
-   valid JSON, every task_id present, exit code 0.
-5. Whole-batch runtime under 10 minutes on CPU with the expected task count.
-6. Confirm no call bypasses `FIREWORKS_BASE_URL` and no model ID outside
-   `ALLOWED_MODELS` is ever requested (both invalidate the submission).
-7. Tokens telemetry printed at the end predicts the leaderboard number;
-   reconcile after each live submission.
+- Repo public, clean, synced, no secrets in history.
+- v4 + v3 images public, anon-pullable, linux/amd64, under 10GB.
+- v4 validated in 4GB/2vCPU container: 48-task batch in 424s, no OOM, all answered.
+- Held-out (LLM-judged, same model for all): v4 100% @ 1785 tokens vs tokenopt
+  3404, v3 3571.
