@@ -22,6 +22,10 @@ def main(argv=None) -> int:
     p.add_argument("--output", default="/output/results.json")
     p.add_argument("--time-budget", type=float, default=None)
 
+    p = sub.add_parser("simple", help="minimal passthrough: raw prompt -> strong model -> raw answer")
+    p.add_argument("--input", default="/input/tasks.json")
+    p.add_argument("--output", default="/output/results.json")
+
     p = sub.add_parser("solve", help="solve a single task from the command line")
     p.add_argument("--input", required=True)
     p.add_argument("--type", dest="task_type")
@@ -65,6 +69,11 @@ def _dispatch(args) -> int:
             config_path=args.config,
             time_budget_s=args.time_budget,
         )
+
+    if args.command == "simple":
+        from .simple import run_simple
+
+        return run_simple(args.input, args.output)
 
     from .config import build_agent, load_settings
 
