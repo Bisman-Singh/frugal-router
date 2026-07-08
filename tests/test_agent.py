@@ -140,7 +140,7 @@ def test_deterministic_confirm_mode_sends_exact_draft():
     result = agent.solve(Task(id="d1", input="What is 124 + 387?", type="math"))
     assert result.source == "remote"
     assert result.answer == "511"
-    assert "deterministic" in result.decision_path
+    assert any('deterministic' in p for p in result.decision_path)
     assert "Draft answer: 511" in remote.calls[0]["user"]
 
 
@@ -166,7 +166,7 @@ def test_solver_defers_word_problems_to_models():
     agent = make_agent(local, MockRemoteBackend(), solver_mode="confirm")
     task = Task(id="d4", input="Muffins cost $3 each. Maria buys 7. What does she pay?", type="math")
     result = agent.solve(task)
-    assert "deterministic" not in result.decision_path
+    assert not any('deterministic' in p for p in result.decision_path)
 
 
 def test_non_chat_models_filtered_and_failover_works():

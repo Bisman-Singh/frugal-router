@@ -25,6 +25,24 @@ def test_rate_time():
     assert solve("A train travels at 60 km per hour for 2.5 hours. How far?", "math") == "150"
 
 
+def test_speed_from_distance_time():
+    assert solve("A car travels 240 kilometers in 3 hours. What is its average speed?", "math") == "80"
+    # no speed keyword -> defer (could be asking something else)
+    assert solve("A car travels 240 km in 3 hours then stops.", "math") is None
+
+
+def test_rectangle_perimeter_and_area():
+    assert solve("A rectangle has a length of 8 meters and a width of 6 meters. What is its perimeter?", "math") == "28"
+    assert solve("A rectangle with length 8 and width 6. What is its area?", "math") == "48"
+
+
+def test_cost_word_problems_defer_to_model():
+    # Cost phrasing varies too much to parse safely; prove-or-defer hands these
+    # to the model rather than risk a misfire.
+    assert solve("A store sells notebooks at $4 each. Priya buys 9 notebooks. Total cost?", "math") is None
+    assert solve("Priya buys 9 notebooks at $4 each and pays with a $50 bill. Change?", "math") is None
+
+
 def test_ordering_unique_extremum():
     prompt = "Ali is taller than Ben. Ben is taller than Carl. Who is the shortest?"
     assert solve(prompt, "logic") == "Carl"

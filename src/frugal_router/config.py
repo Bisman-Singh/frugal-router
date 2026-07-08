@@ -17,6 +17,7 @@ class LocalConfig:
     n_threads: int = 0
     n_gpu_layers: int = 0
     chat_format: str | None = None
+    want_logprobs: bool = False  # off by default: logits_all is too slow on CPU
 
 
 @dataclass
@@ -90,6 +91,7 @@ def build_agent(settings: Settings, *, ledger=None):
                 n_threads=settings.local.n_threads or None,
                 n_gpu_layers=settings.local.n_gpu_layers,
                 chat_format=settings.local.chat_format,
+                want_logprobs=settings.local.want_logprobs,
             )
         except Exception as exc:
             import sys
