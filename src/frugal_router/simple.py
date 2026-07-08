@@ -28,10 +28,21 @@ SYSTEM = (
     "tasks, provide complete, correct, runnable code. Respond in English."
 )
 
-# Substring preferences for model choice, resolved against ALLOWED_MODELS. Code
-# tasks go to the code specialist; everything else to the general Gemma model.
+# Substring preferences for model choice, resolved against ALLOWED_MODELS.
+# Code -> the code specialist. Math/logic -> the reasoning model with reasoning
+# ENABLED and a big budget: below the accuracy gate tokens are irrelevant, and
+# multi-step word problems and constraint puzzles are exactly where a
+# non-reasoning model drops the 2-3 tasks that decide the gate.
+# Everything else -> the general Gemma model.
 _CODE_HINT = re.compile(r"(?i)\b(bug|debug|fix|function|code|python|program|def |class |implement|compile)\b|```")
+_REASON_HINT = re.compile(
+    r"(?i)\b(how (many|much|far|old|long)|calculate|compute|percent|%|total|remainder|"
+    r"average|per (hour|day|week|month)|profit|discount|split|ratio|"
+    r"puzzle|deduce|constraint|exactly one|who (owns|is|was|finished)|taller|older|younger|"
+    r"if all|must be true|either)\b|\d\s*[-+*/^]\s*\d"
+)
 _CODE_MODELS = ["kimi-k2p7-code", "code", "kimi"]
+_REASON_MODELS = ["minimax", "deepseek", "gpt-oss", "glm"]
 _GENERAL_MODELS = ["gemma-4-31b-it", "gemma", "minimax"]
 
 
@@ -65,18 +76,33 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
     client = _client(key, normalize_base_url(base))
     gen_model = _pick(allowed, _GENERAL_MODELS)
     code_model = _pick(allowed, _CODE_MODELS)
+    reason_model = _pick(allowed, _REASON_MODELS)
+
+    def route(prompt: str) -> tuple[str, int]:
+        if _CODE_HINT.search(prompt):
+            return code_model, 2500
+        if _REASON_HINT.search(prompt):
+            # Reasoning model, reasoning left ON, room for thought + answer.
+            return reason_model, 4000
+        return gen_model, per_task_max_tokens
 
     def solve(task):
         tid, prompt = task
-        model = code_model if _CODE_HINT.search(prompt) else gen_model
+        model, budget = route(prompt)
         try:
-            answers[tid] = _call(client, model, prompt, per_task_max_tokens)
+            answers[tid] = _call(client, model, prompt, budget)
         except Exception as exc:
             print(f"task {tid} failed on {model}: {type(exc).__name__}", file=sys.stderr)
-            # one fallback on the other model before giving up
+            # one fallback on the general model before giving up
             other = gen_model if model != gen_model else code_model
             try:
-                answers[tid] = _call(client, other, prompt, per_task_max_tokens)
+                answers[tid] = _call(client, other, prompt, budget)
+            except Exception:
+                pass
+        if not (answers.get(tid) or "").strip():
+            # a truncated/empty reply is a guaranteed zero; one retry on general
+            try:
+                answers[tid] = _call(client, gen_model, prompt, per_task_max_tokens)
             except Exception:
                 pass
         _write(output_path, answers)
@@ -96,6 +122,9 @@ def _client(key, base):
     return OpenAI(api_key=key, base_url=base, timeout=28.0, max_retries=1)
 
 
+_THINK = re.compile(r"(?s)<(?:think|thought)>.*?(?:</(?:think|thought)>|\Z)\s*")
+
+
 def _call(client, model, prompt, max_tokens):
     resp = client.chat.completions.create(
         model=model,
@@ -103,7 +132,8 @@ def _call(client, model, prompt, max_tokens):
         temperature=0.0,
         max_tokens=max_tokens,
     )
-    return (resp.choices[0].message.content or "").strip()
+    text = (resp.choices[0].message.content or "").strip()
+    return _THINK.sub("", text).strip()
 
 
 def _read(input_path, answers):
