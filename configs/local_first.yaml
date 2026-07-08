@@ -1,0 +1,91 @@
+# Local-first config (v3 strategy). Per the official guide, local inference
+# counts toward accuracy at ZERO Fireworks tokens, so the best rank is answering
+# as much as possible locally and escalating only to hold the accuracy gate.
+# Sized for the grading environment: 4 GB RAM, 2 vCPU, no GPU.
+
+local:
+  model_path: models/qwen3b.gguf
+  n_ctx: 4096          # smaller context = less RAM headroom used
+  n_threads: 2         # 2 vCPU
+  n_gpu_layers: 0
+
+remote:
+  base_url: https://api.fireworks.ai/inference/v1
+  default_model: ""    # resolved from ALLOWED_MODELS at runtime
+  timeout_s: 25
+  max_retries: 1
+
+router:
+  answer_source: local   # confident local answers emit directly at 0 tokens
+  solver_mode: direct    # deterministic math/logic answers at 0 tokens
+  weights: { agreement: 0.6, logprob: 0.25, predictor: 0.15 }
+  predictor_path: artifacts/predictor.joblib
+
+# CPU is slow, so the scheduler must guarantee the batch finishes in 10 minutes.
+# est_* are per-task wall-clock estimates; when the budget runs low the agent
+# degrades local voting -> single local -> direct remote (remote is faster).
+scheduler:
+  time_budget_s: 555
+  est_full_s: 30       # local voting on 2 vCPU 3B
+  est_greedy_s: 12     # single local sample
+  est_remote_s: 4      # one remote call (fast, but costs tokens)
+  max_workers: 1       # a single llama context is not thread-safe
+
+policies:
+  defaults:
+    n_samples: 1
+    sample_temperature: 0.7
+    local_max_tokens: 512
+    escalation_threshold: 0.5
+    p_fail_cutoff: 0.7
+    remote_reasoning_effort: low
+    remote_model_hints: [gemma]
+    remote_max_tokens: 256
+  per_type:
+    factual:
+      n_samples: 1
+      escalation_threshold: 0.45   # a 3B is reliable here; keep local
+      local_max_tokens: 256
+      remote_max_tokens: 96
+    math:
+      n_samples: 3                 # solvers cover most; vote on the rest
+      escalation_threshold: 0.6
+      local_max_tokens: 512
+      remote_cot: true
+      remote_max_tokens: 300
+      remote_model_hints: [minimax, gemma]
+    sentiment:
+      n_samples: 1
+      escalation_threshold: 0.45
+      local_max_tokens: 200
+      remote_max_tokens: 96
+    summarization:
+      n_samples: 1
+      escalation_threshold: 0.4
+      local_max_tokens: 300
+      allow_compression: false
+      remote_max_tokens: 200
+    ner:
+      n_samples: 1
+      escalation_threshold: 0.5
+      local_max_tokens: 300
+      remote_max_tokens: 200
+    logic:
+      n_samples: 3
+      escalation_threshold: 0.6
+      local_max_tokens: 512
+      remote_cot: true
+      remote_max_tokens: 250
+      remote_model_hints: [minimax, gemma]
+    code_debug:
+      n_samples: 1
+      escalation_threshold: 0.9    # hard for a 3B; keep local only if clearly valid
+      local_max_tokens: 768
+      remote_max_tokens: 600
+      remote_model_hints: [code, kimi, gemma]
+    code_gen:
+      n_samples: 1
+      escalation_threshold: 0.9
+      local_max_tokens: 768
+      remote_max_tokens: 600
+      remote_model_hints: [code, kimi, gemma]

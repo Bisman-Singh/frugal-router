@@ -15,7 +15,7 @@ from .contracts import STYLE_LINE, style_of
 from .extract import final_answer, is_valid_answer, vote_key
 from .ledger import Ledger
 from .policy import Policy, PolicyBook
-from .solvers import solve as deterministic_solve
+from .solvers import solve_any as deterministic_solve_any
 from .tasks import Task
 
 
@@ -72,12 +72,15 @@ class RoutingAgent:
             policy = replace(policy, n_samples=1)
             path.append("scheduler:greedy")
 
-        # Deterministic prove-or-defer tier: pure computation answered exactly
-        # by code, then confirmed by a tiny Fireworks call.
-        if self.solver_mode != "off" and task_type in ("math", "logic"):
-            exact = deterministic_solve(task.rendered_input(), task_type)
-            if exact is not None:
-                path.append("deterministic")
+        # Deterministic prove-or-defer tier: run on EVERY task regardless of the
+        # classifier, since it routinely misreads 'perimeter' or 'average speed'
+        # as factual. Prove-or-defer makes this safe: nothing is returned unless
+        # the parse is unambiguous.
+        if self.solver_mode != "off":
+            hit = deterministic_solve_any(task.rendered_input())
+            if hit is not None:
+                exact, task_type = hit
+                path.append(f"deterministic:{task_type}")
                 if self.solver_mode == "direct" or self.remote is None:
                     return self._finish(task, task_type, exact, "local", None, exact, 0, 0, path)
                 try:

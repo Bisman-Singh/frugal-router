@@ -68,15 +68,33 @@ _SAFE_OPS = {
 def solve(prompt: str, category: str) -> str | None:
     """Return the exact answer, or None to defer to a model."""
     if category == "math":
-        for solver in (_percent_of, _rate_time, _arithmetic):
-            answer = solver(prompt)
-            if answer is not None:
-                return answer
+        return _first_hit(prompt, _MATH_SOLVERS)
     if category == "logic":
-        for solver in (_syllogism, _ordering):
-            answer = solver(prompt)
-            if answer is not None:
-                return answer
+        return _first_hit(prompt, _LOGIC_SOLVERS)
+    return None
+
+
+def solve_any(prompt: str) -> tuple[str, str] | None:
+    """Try every solver regardless of the task's category and return
+    (answer, category) on a proven hit. Prove-or-defer keeps this safe: a
+    solver returns None unless the parse is unambiguous, so running math
+    solvers on a factual prompt simply finds nothing. This decouples free
+    answers from classification, which routinely misses 'perimeter' or
+    'average speed' as math."""
+    answer = _first_hit(prompt, _MATH_SOLVERS)
+    if answer is not None:
+        return answer, "math"
+    answer = _first_hit(prompt, _LOGIC_SOLVERS)
+    if answer is not None:
+        return answer, "logic"
+    return None
+
+
+def _first_hit(prompt: str, solvers) -> str | None:
+    for solver in solvers:
+        answer = solver(prompt)
+        if answer is not None:
+            return answer
     return None
 
 
@@ -107,10 +125,17 @@ def _eval_expr(expr: str) -> float | None:
         return None
 
 
+_ARITH_TRAPS = re.compile(
+    r"(?i)\b(binary|hexadecimal|hex|octal|base|roman|remainder|modulo|mod|"
+    r"prime|factor|digit|rounded|round|nearest|estimate)\b"
+)
+
+
 def _arithmetic(prompt: str) -> str | None:
     """Bare arithmetic like 'What is 124 + 387?'. Defers if the prompt has any
-    numbers outside the single expression, or percent language."""
-    if re.search(r"(?i)percent|%", prompt):
+    numbers outside the single expression, percent language, or wording that
+    changes the meaning of the digits (base conversions, rounding, etc.)."""
+    if re.search(r"(?i)percent|%", prompt) or _ARITH_TRAPS.search(prompt):
         return None
     candidates = [
         c.strip() for c in _EXPR_CHARS.findall(prompt)
@@ -143,6 +168,45 @@ def _rate_time(prompt: str) -> str | None:
     if len(re.findall(_NUM, prompt)) != 2:
         return None
     return _format_number(float(m.group(1)) * float(m.group(2)))
+
+
+_SPEED = re.compile(
+    rf"(?i)\btravels?\s+({_NUM})\s*(?:km|kilometers?|miles?|m)\b.*?\bin\s+({_NUM})\s*hours?\b"
+)
+
+
+def _speed(prompt: str) -> str | None:
+    """'travels 240 km in 3 hours, average speed?' -> distance / time."""
+    if not re.search(r"(?i)\b(speed|how fast|per hour)\b", prompt):
+        return None
+    m = _SPEED.search(prompt)
+    if not m or len(re.findall(_NUM, prompt)) != 2:
+        return None
+    dist, time = float(m.group(1)), float(m.group(2))
+    if time == 0:
+        return None
+    return _format_number(dist / time)
+
+
+_RECT_LW = re.compile(rf"length\s+(?:of\s+)?({_NUM})\b.*?\bwidth\s+(?:of\s+)?({_NUM})", re.I | re.S)
+_RECT_WL = re.compile(rf"width\s+(?:of\s+)?({_NUM})\b.*?\blength\s+(?:of\s+)?({_NUM})", re.I | re.S)
+
+
+def _rectangle(prompt: str) -> str | None:
+    """Rectangle perimeter or area from an explicit length and width."""
+    if not re.search(r"(?i)\brectangle\b", prompt):
+        return None
+    m = _RECT_LW.search(prompt) or _RECT_WL.search(prompt)
+    if not m or len(re.findall(_NUM, prompt)) != 2:
+        return None
+    a, b = float(m.group(1)), float(m.group(2))
+    if re.search(r"(?i)\bperimeter\b", prompt):
+        return _format_number(2 * (a + b))
+    if re.search(r"(?i)\barea\b", prompt):
+        return _format_number(a * b)
+    return None
+
+
 
 
 def _ordering(prompt: str) -> str | None:
@@ -237,3 +301,7 @@ def _syllogism(prompt: str) -> str | None:
     if a1 == qa and b1 == a2 and b2 == qb:
         return "yes"
     return None
+
+
+_MATH_SOLVERS = (_percent_of, _rate_time, _speed, _rectangle, _arithmetic)
+_LOGIC_SOLVERS = (_syllogism, _ordering)

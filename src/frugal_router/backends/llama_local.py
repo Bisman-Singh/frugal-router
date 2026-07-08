@@ -12,20 +12,25 @@ class LlamaLocalBackend:
         n_threads: int | None = None,
         n_gpu_layers: int = 0,
         chat_format: str | None = None,
+        want_logprobs: bool = False,
     ):
         from llama_cpp import Llama  # imported lazily so tests run without the wheel
 
+        # logits_all makes CPU generation several times slower, which blows the
+        # 2-vCPU / 10-minute budget. Only enable it when logprob confidence is
+        # actually used; otherwise rely on self-consistency voting.
         self._llm = Llama(
             model_path=model_path,
             n_ctx=n_ctx,
             n_threads=n_threads or None,
             n_gpu_layers=n_gpu_layers,
             chat_format=chat_format,  # None = use the template from GGUF metadata
-            logits_all=True,  # required for per-token logprobs in the chat API
+            logits_all=want_logprobs,
             verbose=False,
         )
         self.n_ctx = n_ctx
-        self._supports_logprobs = True
+        self._want_logprobs = want_logprobs
+        self._supports_logprobs = want_logprobs
 
     def _chat(self, system: str | None, user: str, **kwargs) -> dict:
         messages = []
@@ -47,14 +52,10 @@ class LlamaLocalBackend:
     def generate(self, system, user, *, n=1, temperature=0.0, max_tokens=512):
         generations = []
         for _ in range(n):
-            resp = self._chat(
-                system,
-                user,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                logprobs=True,
-                top_logprobs=1,
-            )
+            kwargs = dict(temperature=temperature, max_tokens=max_tokens)
+            if self._want_logprobs:
+                kwargs.update(logprobs=True, top_logprobs=1)
+            resp = self._chat(system, user, **kwargs)
             choice = resp["choices"][0]
             usage = resp.get("usage") or {}
             generations.append(
