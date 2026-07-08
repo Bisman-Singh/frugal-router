@@ -43,7 +43,12 @@ _REASON_HINT = re.compile(
 )
 _CODE_MODELS = ["kimi-k2p7-code", "code", "kimi"]
 _REASON_MODELS = ["minimax", "deepseek", "gpt-oss", "glm"]
-_GENERAL_MODELS = ["gemma-4-31b-it", "gemma", "minimax"]
+# v9: the 78.9% leader routes everything non-code to the reasoning model with
+# no output cap. Below the gate, tokens are irrelevant; truncation and weaker
+# general models are the only enemies. GENERAL_HINTS env can flip this back to
+# gemma-first for A/B without a rebuild.
+_GENERAL_MODELS = [h.strip() for h in os.environ.get(
+    "GENERAL_HINTS", "minimax,gemma-4-31b-it,gemma").split(",") if h.strip()]
 
 
 def _pick(allowed, hints):
@@ -80,11 +85,11 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
 
     def route(prompt: str) -> tuple[str, int]:
         if _CODE_HINT.search(prompt):
-            return code_model, 2500
+            return code_model, 6000
         if _REASON_HINT.search(prompt):
             # Reasoning model, reasoning left ON, room for thought + answer.
-            return reason_model, 4000
-        return gen_model, per_task_max_tokens
+            return reason_model, 8000
+        return gen_model, 4000
 
     def solve(task):
         tid, prompt = task
@@ -119,7 +124,7 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
 def _client(key, base):
     from openai import OpenAI
 
-    return OpenAI(api_key=key, base_url=base, timeout=28.0, max_retries=1)
+    return OpenAI(api_key=key, base_url=base, timeout=55.0, max_retries=1)
 
 
 _THINK = re.compile(r"(?s)<(?:think|thought)>.*?(?:</(?:think|thought)>|\Z)\s*")
