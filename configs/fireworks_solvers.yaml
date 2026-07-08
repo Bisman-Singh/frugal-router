@@ -1,0 +1,99 @@
+# Kickoff-day swaps live here: local model file, remote model name, thresholds.
+# Everything else in the codebase is model-agnostic.
+
+local:
+  model_path: models/local.gguf
+  n_ctx: 8192
+  n_threads: 0        # 0 = library default
+  n_gpu_layers: 0     # raise when the judging VM turns out to have a GPU
+
+remote:
+  # FIREWORKS_BASE_URL and FIREWORKS_API_KEY env vars override at runtime;
+  # the judging harness injects both and all calls must go through them.
+  base_url: https://api.fireworks.ai/inference/v1
+  # Intentionally empty: model IDs must come from the ALLOWED_MODELS env var,
+  # never from code or config (event rule). For dev, export ALLOWED_MODELS.
+  default_model: ""
+  timeout_s: 25       # the harness allows 30s per request
+  max_retries: 1      # transport failures only; a retry that reaches the proxy bills twice
+
+router:
+  weights: { agreement: 0.6, logprob: 0.25, predictor: 0.15 }
+  # Organizer-clarified rule (Discord, Jul 2026): every scored answer must
+  # come from a Fireworks call. "local" mode (zero-token confident answers)
+  # is kept for development and in case the ruling changes again.
+  answer_source: fireworks
+  # Deterministic prove-or-defer solvers for pure-computation math/logic.
+  # Official guide (Jul 2026): local/deterministic answers count toward accuracy
+  # at ZERO Fireworks tokens, so "direct" (emit exact answer, no remote call) is
+  # both legal and optimal. "confirm" and "off" remain for fallback.
+  solver_mode: direct
+  predictor_path: artifacts/predictor.joblib
+
+# Wall-clock scheduler: the judging harness allows 600s for the whole batch.
+# Estimates are per-task CPU costs used to pick full / greedy / remote_direct.
+scheduler:
+  time_budget_s: 570
+  est_full_s: 40      # recalibrate against measured CPU throughput of the baked model
+  est_greedy_s: 12
+  est_remote_s: 5
+  max_workers: 4     # parallel remote calls when no local model is loaded
+
+# Per-category policy is the strongest routing signal: the 8 categories are
+# published, and each has its own local-vs-remote economics.
+policies:
+  defaults:
+    n_samples: 1
+    sample_temperature: 0.7
+    local_max_tokens: 512
+    escalation_threshold: 0.6
+    p_fail_cutoff: 0.65
+    remote_max_tokens: 512   # a cap, not a cost; only tokens actually emitted bill
+    remote_reasoning_effort: low  # cheap for reasoning harness models (minimax); ignored by non-reasoning ones
+    # Substrings matched against the runtime ALLOWED_MODELS list, in order.
+    remote_model_hints: [gemma-4-31b-it, gemma]
+  per_type:
+    factual:
+      n_samples: 3
+      escalation_threshold: 0.55
+      remote_max_tokens: 96
+    math:
+      n_samples: 5
+      escalation_threshold: 0.7
+      remote_cot: true        # suppressing reasoning measurably hurts hard math
+      remote_max_tokens: 512   # generous cap: truncation fails the judge, caps cost nothing
+      # use_draft off: unproven vs reasoning remotes; enable only if a
+      # non-reasoning harness model proves cheaper with drafts.
+      remote_model_hints: [minimax, gemma-4-31b-it, gemma]
+    sentiment:
+      n_samples: 3
+      escalation_threshold: 0.5
+      remote_max_tokens: 96
+    summarization:
+      n_samples: 1            # voting over free-form text does not converge
+      local_max_tokens: 400
+      escalation_threshold: 0.4
+      remote_max_tokens: 200
+      allow_compression: false  # the judge must see a summary of the real source
+    ner:
+      n_samples: 1
+      escalation_threshold: 0.45
+      remote_max_tokens: 200
+    logic:
+      n_samples: 5
+      escalation_threshold: 0.7
+      remote_cot: true
+      remote_max_tokens: 512
+      remote_model_hints: [minimax, gemma-4-31b-it, gemma]
+    code_debug:
+      n_samples: 1
+      local_max_tokens: 768
+      escalation_threshold: 0.6
+      remote_max_tokens: 600
+      remote_model_hints: [kimi-k2p7-code, code, kimi, gemma-4-31b-it]
+    code_gen:
+      n_samples: 1
+      local_max_tokens: 768
+      escalation_threshold: 0.6
+      remote_max_tokens: 600
+      remote_model_hints: [kimi-k2p7-code, code, kimi, gemma-4-31b-it]

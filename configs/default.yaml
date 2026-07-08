@@ -1,99 +1,94 @@
-# Kickoff-day swaps live here: local model file, remote model name, thresholds.
-# Everything else in the codebase is model-agnostic.
+# v4 local-first config. Per the official guide, local inference counts toward
+# accuracy at ZERO Fireworks tokens, so the best rank answers as much as possible
+# locally and escalates only to hold the accuracy gate or beat the clock.
+# Sized for the grading environment: 4 GB RAM, 2 vCPU, no GPU.
+#
+# Strategy: category-level routing, not per-task voting (voting is too slow on
+# 2 vCPU). Keep a category local when the 3B is reliable there; escalate the
+# slow/hard categories wholesale. A validity check still escalates any empty or
+# malformed local answer, and the scheduler escalates everything under time
+# pressure so the batch never times out.
 
 local:
-  model_path: models/local.gguf
-  n_ctx: 8192
-  n_threads: 0        # 0 = library default
-  n_gpu_layers: 0     # raise when the judging VM turns out to have a GPU
+  model_path: models/qwen3b.gguf
+  n_ctx: 4096
+  n_threads: 2
+  n_gpu_layers: 0
+  want_logprobs: false   # logits_all is multiple-x slower on CPU; use voting/validity instead
 
 remote:
-  # FIREWORKS_BASE_URL and FIREWORKS_API_KEY env vars override at runtime;
-  # the judging harness injects both and all calls must go through them.
   base_url: https://api.fireworks.ai/inference/v1
-  # Intentionally empty: model IDs must come from the ALLOWED_MODELS env var,
-  # never from code or config (event rule). For dev, export ALLOWED_MODELS.
   default_model: ""
-  timeout_s: 25       # the harness allows 30s per request
-  max_retries: 1      # transport failures only; a retry that reaches the proxy bills twice
+  timeout_s: 25
+  max_retries: 1
 
 router:
-  weights: { agreement: 0.6, logprob: 0.25, predictor: 0.15 }
-  # Organizer-clarified rule (Discord, Jul 2026): every scored answer must
-  # come from a Fireworks call. "local" mode (zero-token confident answers)
-  # is kept for development and in case the ruling changes again.
-  answer_source: fireworks
-  # Deterministic prove-or-defer solvers for pure-computation math/logic.
-  # Official guide (Jul 2026): local/deterministic answers count toward accuracy
-  # at ZERO Fireworks tokens, so "direct" (emit exact answer, no remote call) is
-  # both legal and optimal. "confirm" and "off" remain for fallback.
-  solver_mode: direct
+  answer_source: local   # confident/valid local answers emit at 0 tokens
+  solver_mode: direct    # deterministic math/logic at 0 tokens, instant
+  weights: { agreement: 1.0 }   # only voting agreement matters without logprobs
   predictor_path: artifacts/predictor.joblib
 
-# Wall-clock scheduler: the judging harness allows 600s for the whole batch.
-# Estimates are per-task CPU costs used to pick full / greedy / remote_direct.
+# CPU is slow (~6 tok/s for a 3B), so the scheduler must guarantee 10-minute
+# completion. Below est_greedy_s of remaining per-task budget it stops trying
+# local and escalates directly to the faster remote path.
 scheduler:
-  time_budget_s: 570
-  est_full_s: 40      # recalibrate against measured CPU throughput of the baked model
-  est_greedy_s: 12
-  est_remote_s: 5
-  max_workers: 4     # parallel remote calls when no local model is loaded
+  time_budget_s: 520
+  est_full_s: 18
+  est_greedy_s: 11
+  est_remote_s: 4
+  max_workers: 1     # a single llama context is not thread-safe
 
-# Per-category policy is the strongest routing signal: the 8 categories are
-# published, and each has its own local-vs-remote economics.
+# threshold 0.0 = keep the local answer unless it fails the validity check
+# (empty / malformed / missing justification). always_remote = never try local.
 policies:
   defaults:
     n_samples: 1
-    sample_temperature: 0.7
-    local_max_tokens: 512
-    escalation_threshold: 0.6
-    p_fail_cutoff: 0.65
-    remote_max_tokens: 512   # a cap, not a cost; only tokens actually emitted bill
-    remote_reasoning_effort: low  # cheap for reasoning harness models (minimax); ignored by non-reasoning ones
-    # Substrings matched against the runtime ALLOWED_MODELS list, in order.
+    sample_temperature: 0.0
+    local_max_tokens: 384
+    escalation_threshold: 0.0
+    remote_reasoning_effort: low
     remote_model_hints: [gemma-4-31b-it, gemma]
+    remote_max_tokens: 256
   per_type:
+    # Kept-local categories use 2-sample voting: if the two samples disagree the
+    # answer is uncertain, so escalate. This catches the 3B's confident errors
+    # on the hidden set at ~2x local cost (still far cheaper than remote tokens).
     factual:
-      n_samples: 3
-      escalation_threshold: 0.55
+      n_samples: 2
+      local_max_tokens: 128
+      escalation_threshold: 0.6   # escalate when the two samples disagree
       remote_max_tokens: 96
     math:
-      n_samples: 5
-      escalation_threshold: 0.7
-      remote_cot: true        # suppressing reasoning measurably hurts hard math
-      remote_max_tokens: 512   # generous cap: truncation fails the judge, caps cost nothing
-      # use_draft off: unproven vs reasoning remotes; enable only if a
-      # non-reasoning harness model proves cheaper with drafts.
+      n_samples: 2                # solvers handle most; vote on the rest
+      local_max_tokens: 512
+      escalation_threshold: 0.6
+      remote_cot: true
+      remote_max_tokens: 300
       remote_model_hints: [minimax, gemma-4-31b-it, gemma]
     sentiment:
-      n_samples: 3
-      escalation_threshold: 0.5
+      n_samples: 2
+      local_max_tokens: 160       # label + one-sentence justification
+      escalation_threshold: 0.6
       remote_max_tokens: 96
     summarization:
-      n_samples: 1            # voting over free-form text does not converge
-      local_max_tokens: 400
-      escalation_threshold: 0.4
+      n_samples: 1                # free-form text: samples never match, so no vote
+      local_max_tokens: 200
+      escalation_threshold: 0.0   # trust local; validity check still escalates junk
+      allow_compression: false
       remote_max_tokens: 200
-      allow_compression: false  # the judge must see a summary of the real source
     ner:
-      n_samples: 1
-      escalation_threshold: 0.45
+      always_remote: true         # a 3B mislabels entity types; escalate wholesale
       remote_max_tokens: 200
     logic:
-      n_samples: 5
-      escalation_threshold: 0.7
+      always_remote: true         # 3B unreliable on hard puzzles; solver still catches pattern logic free
       remote_cot: true
-      remote_max_tokens: 512
+      remote_max_tokens: 250
       remote_model_hints: [minimax, gemma-4-31b-it, gemma]
     code_debug:
-      n_samples: 1
-      local_max_tokens: 768
-      escalation_threshold: 0.6
+      always_remote: true         # too slow locally on 2 vCPU, and hard for a 3B
       remote_max_tokens: 600
       remote_model_hints: [kimi-k2p7-code, code, kimi, gemma-4-31b-it]
     code_gen:
-      n_samples: 1
-      local_max_tokens: 768
-      escalation_threshold: 0.6
+      always_remote: true
       remote_max_tokens: 600
       remote_model_hints: [kimi-k2p7-code, code, kimi, gemma-4-31b-it]
