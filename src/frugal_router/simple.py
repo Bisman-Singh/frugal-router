@@ -91,25 +91,43 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
             return reason_model, 8000
         return gen_model, 4000
 
+    # Second-opinion generator and referee, from different model families.
+    # ENSEMBLE=0 disables (single-model mode identical to v9).
+    ensemble = os.environ.get("ENSEMBLE", "1") != "0"
+    alt_model = _pick(allowed, ["gemma-4-31b-it", "gemma", "deepseek", "glm"])
+    referee_model = _pick(allowed, ["gemma-4-26b-a4b", "gemma", "minimax"])
+
     def solve(task):
         tid, prompt = task
         model, budget = route(prompt)
+        primary = ""
         try:
-            answers[tid] = _call(client, model, prompt, budget)
+            primary = _call(client, model, prompt, budget)
         except Exception as exc:
             print(f"task {tid} failed on {model}: {type(exc).__name__}", file=sys.stderr)
-            # one fallback on the general model before giving up
-            other = gen_model if model != gen_model else code_model
+
+        second = ""
+        if ensemble:
+            second_model = alt_model if alt_model != model else code_model
             try:
-                answers[tid] = _call(client, other, prompt, budget)
-            except Exception:
-                pass
-        if not (answers.get(tid) or "").strip():
+                second = _call(client, second_model, prompt, budget)
+            except Exception as exc:
+                print(f"task {tid} second opinion failed: {type(exc).__name__}", file=sys.stderr)
+
+        final = primary or second
+        if ensemble and primary and second and primary != second:
+            try:
+                final = _referee(client, referee_model, prompt, primary, second) or final
+            except Exception as exc:
+                print(f"task {tid} referee failed: {type(exc).__name__}", file=sys.stderr)
+
+        if not final.strip():
             # a truncated/empty reply is a guaranteed zero; one retry on general
             try:
-                answers[tid] = _call(client, gen_model, prompt, per_task_max_tokens)
+                final = _call(client, gen_model, prompt, per_task_max_tokens)
             except Exception:
                 pass
+        answers[tid] = final
         _write(output_path, answers)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -128,6 +146,28 @@ def _client(key, base):
 
 
 _THINK = re.compile(r"(?s)<(?:think|thought)>.*?(?:</(?:think|thought)>|\Z)\s*")
+
+REFEREE_SYSTEM = (
+    "You are a meticulous grader consolidating two candidate answers to a task. "
+    "Check each against the task's explicit requirements (correctness, "
+    "completeness, any format or length constraints). Output ONLY the single "
+    "best final answer for the task: if one candidate is fully correct and "
+    "complete, output it verbatim; otherwise output a corrected answer that "
+    "fixes the flaws. Never output commentary, labels, or comparisons - only "
+    "the final answer itself, in English."
+)
+
+
+def _referee(client, model, prompt, a, b):
+    user = f"TASK:\n{prompt}\n\nCANDIDATE 1:\n{a}\n\nCANDIDATE 2:\n{b}\n\nFinal answer:"
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": REFEREE_SYSTEM}, {"role": "user", "content": user}],
+        temperature=0.0,
+        max_tokens=8000,
+    )
+    text = (resp.choices[0].message.content or "").strip()
+    return _THINK.sub("", text).strip()
 
 
 def _call(client, model, prompt, max_tokens):
