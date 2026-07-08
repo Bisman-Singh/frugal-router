@@ -1,94 +1,75 @@
-# v4 local-first config. Per the official guide, local inference counts toward
-# accuracy at ZERO Fireworks tokens, so the best rank answers as much as possible
-# locally and escalates only to hold the accuracy gate or beat the clock.
-# Sized for the grading environment: 4 GB RAM, 2 vCPU, no GPU.
-#
-# Strategy: category-level routing, not per-task voting (voting is too slow on
-# 2 vCPU). Keep a category local when the 3B is reliable there; escalate the
-# slow/hard categories wholesale. A validity check still escalates any empty or
-# malformed local answer, and the scheduler escalates everything under time
-# pressure so the batch never times out.
+# v5 max-accuracy config. The entire leaderboard is failing the accuracy gate,
+# so below the gate tokens are irrelevant: the only goal is correctness. Route
+# every non-solver task to the strongest Fireworks model with generous budgets
+# and full reasoning; keep the always-correct deterministic solvers for free.
+# Token efficiency is re-introduced only once something clears the gate.
 
 local:
-  model_path: models/qwen3b.gguf
-  n_ctx: 4096
-  n_threads: 2
-  n_gpu_layers: 0
-  want_logprobs: false   # logits_all is multiple-x slower on CPU; use voting/validity instead
+  model_path: ""         # no local model: a small model only lowers accuracy
 
 remote:
   base_url: https://api.fireworks.ai/inference/v1
-  default_model: ""
-  timeout_s: 25
+  default_model: ""      # resolved from ALLOWED_MODELS at runtime
+  timeout_s: 28
   max_retries: 1
 
 router:
-  answer_source: local   # confident/valid local answers emit at 0 tokens
-  solver_mode: direct    # deterministic math/logic at 0 tokens, instant
-  weights: { agreement: 1.0 }   # only voting agreement matters without logprobs
+  answer_source: fireworks
+  solver_mode: direct    # deterministic math/logic answers, proven correct, 0 tokens
+  weights: { agreement: 0.6, logprob: 0.25, predictor: 0.15 }
   predictor_path: artifacts/predictor.joblib
 
-# CPU is slow (~6 tok/s for a 3B), so the scheduler must guarantee 10-minute
-# completion. Below est_greedy_s of remaining per-task budget it stops trying
-# local and escalates directly to the faster remote path.
 scheduler:
-  time_budget_s: 520
-  est_full_s: 18
-  est_greedy_s: 11
+  time_budget_s: 555
+  est_full_s: 6
+  est_greedy_s: 4
   est_remote_s: 4
-  max_workers: 1     # a single llama context is not thread-safe
+  max_workers: 6         # pure remote: parallelise to stay well under 10 min
 
-# threshold 0.0 = keep the local answer unless it fails the validity check
-# (empty / malformed / missing justification). always_remote = never try local.
 policies:
   defaults:
     n_samples: 1
-    sample_temperature: 0.0
-    local_max_tokens: 384
+    local_max_tokens: 512
     escalation_threshold: 0.0
-    remote_reasoning_effort: low
+    remote_reasoning_effort: high    # accuracy over tokens while below the gate
     remote_model_hints: [gemma-4-31b-it, gemma]
-    remote_max_tokens: 256
+    remote_max_tokens: 1024
+    always_remote: true
   per_type:
-    # Kept-local categories use 2-sample voting: if the two samples disagree the
-    # answer is uncertain, so escalate. This catches the 3B's confident errors
-    # on the hidden set at ~2x local cost (still far cheaper than remote tokens).
     factual:
-      n_samples: 2
-      local_max_tokens: 128
-      escalation_threshold: 0.6   # escalate when the two samples disagree
-      remote_max_tokens: 96
+      always_remote: true
+      remote_max_tokens: 768
+      remote_model_hints: [gemma-4-31b-it, gemma]
     math:
-      n_samples: 2                # solvers handle most; vote on the rest
-      local_max_tokens: 512
-      escalation_threshold: 0.6
+      always_remote: true
       remote_cot: true
-      remote_max_tokens: 300
+      remote_reasoning_effort: high
+      remote_max_tokens: 2048        # room for reasoning tokens + the answer
       remote_model_hints: [minimax, gemma-4-31b-it, gemma]
     sentiment:
-      n_samples: 2
-      local_max_tokens: 160       # label + one-sentence justification
-      escalation_threshold: 0.6
-      remote_max_tokens: 96
+      always_remote: true
+      remote_max_tokens: 512
+      remote_model_hints: [gemma-4-31b-it, gemma]
     summarization:
-      n_samples: 1                # free-form text: samples never match, so no vote
-      local_max_tokens: 200
-      escalation_threshold: 0.0   # trust local; validity check still escalates junk
+      always_remote: true
       allow_compression: false
-      remote_max_tokens: 200
+      remote_max_tokens: 768
+      remote_model_hints: [gemma-4-31b-it, gemma]
     ner:
-      always_remote: true         # a 3B mislabels entity types; escalate wholesale
-      remote_max_tokens: 200
+      always_remote: true
+      remote_max_tokens: 768
+      remote_model_hints: [gemma-4-31b-it, gemma]
     logic:
-      always_remote: true         # 3B unreliable on hard puzzles; solver still catches pattern logic free
+      always_remote: true
       remote_cot: true
-      remote_max_tokens: 250
+      remote_reasoning_effort: high
+      remote_max_tokens: 2048
       remote_model_hints: [minimax, gemma-4-31b-it, gemma]
     code_debug:
-      always_remote: true         # too slow locally on 2 vCPU, and hard for a 3B
-      remote_max_tokens: 600
+      always_remote: true
+      remote_max_tokens: 2048
       remote_model_hints: [kimi-k2p7-code, code, kimi, gemma-4-31b-it]
     code_gen:
       always_remote: true
-      remote_max_tokens: 600
+      remote_max_tokens: 2048
       remote_model_hints: [kimi-k2p7-code, code, kimi, gemma-4-31b-it]

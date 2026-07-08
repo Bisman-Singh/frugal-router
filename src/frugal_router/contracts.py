@@ -25,10 +25,10 @@ class Contract:
 CONTRACTS: dict[str, Contract] = {
     "factual": Contract(
         "factual",
-        STYLE_LINE,
-        "Answer the question accurately. Think briefly if needed, then output the "
-        "final line as exactly: Answer: <the direct answer, one short sentence>",
-        "Answer directly in one short sentence.",
+        STYLE_FULL,
+        "Answer the question accurately and completely, covering every part it asks "
+        "about. Be correct and clear.",
+        "Answer accurately and completely, addressing every part of the question.",
     ),
     "math": Contract(
         "math",
@@ -43,7 +43,8 @@ CONTRACTS: dict[str, Contract] = {
         "Decide the sentiment. Output the final line as exactly: "
         "Answer: <positive/negative/neutral/mixed> - <one sentence of justification "
         "citing the wording of the text>",
-        "Reply with the sentiment label and one sentence of justification.",
+        "Output the final line as: Answer: <positive/negative/neutral/mixed> - "
+        "<one sentence justification citing the text>",
     ),
     "summarization": Contract(
         "summarization",
@@ -64,9 +65,9 @@ CONTRACTS: dict[str, Contract] = {
     "logic": Contract(
         "logic",
         STYLE_LINE,
-        "Work through the constraints step by step. Then output the final line as "
-        "exactly: Answer: <the conclusion, as briefly as the question allows>",
-        "Reason step by step, then end with the line: Answer: <the conclusion>",
+        "Work through the constraints step by step, then state the conclusion. Output "
+        "the final line as exactly: Answer: <the conclusion>",
+        "Reason step by step, then end with the line: Answer: <the full conclusion>",
     ),
     "code_debug": Contract(
         "code_debug",
