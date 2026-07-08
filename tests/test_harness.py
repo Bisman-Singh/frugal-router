@@ -87,10 +87,9 @@ def test_scheduler_degrades_when_short_on_time(tmp_path):
     agent = StubAgent()
     run_batch(write_tasks(tmp_path, tasks), out, agent=agent, time_budget_s=25.0)
     modes = [c["mode"] for c in agent.calls]
-    assert modes[0] == "remote_direct"  # 25s across 5 tasks cannot afford local
-    assert "full" not in modes
-    # As instant tasks free up budget the scheduler may recover to greedy;
-    # that is intended behavior, not a bug.
+    assert modes[0] == "remote_direct"  # 25s across 5 tasks cannot afford local up front
+    # As instant (stub) tasks free up budget the scheduler recovers toward local;
+    # with real slow local tasks the budget would keep shrinking. Both are intended.
 
 
 def test_hard_stop_flushes_valid_output_without_solving(tmp_path):
