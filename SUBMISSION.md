@@ -54,5 +54,4 @@ Both are public, linux/amd64, under the 10GB limit (v4 2.2GB, v3 0.7GB).
 - Repo public, clean, synced, no secrets in history.
 - v4 + v3 images public, anon-pullable, linux/amd64, under 10GB.
 - v4 validated in 4GB/2vCPU container: 48-task batch in 424s, no OOM, all answered.
-- Held-out (LLM-judged, same model for all): v4 100% @ 1785 tokens vs tokenopt
-  3404, v3 3571.
+- Held-out (LLM-judged): v4 100% accuracy @ 1785 tokens; v3 @ 3571.
