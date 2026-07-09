@@ -91,14 +91,23 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
             return reason_model, 8000
         return gen_model, 4000
 
+    # LEAN=1: token-war mode. Zero-token classification + deterministic solvers
+    # answer provable math/logic free; every other task is ONE call with a terse
+    # category prompt and a tuned cap. Used only once the accuracy gate is
+    # passed; default mode stays accuracy-first ensemble.
+    lean = os.environ.get("LEAN", "0") == "1"
     # Second-opinion generator and referee, from different model families.
     # ENSEMBLE=0 disables (single-model mode identical to v9).
-    ensemble = os.environ.get("ENSEMBLE", "1") != "0"
+    ensemble = (os.environ.get("ENSEMBLE", "1") != "0") and not lean
     alt_model = _pick(allowed, ["gemma-4-31b-it", "gemma", "deepseek", "glm"])
     referee_model = _pick(allowed, ["gemma-4-26b-a4b", "gemma", "minimax"])
 
     def solve(task):
         tid, prompt = task
+        if lean:
+            answers[tid] = _solve_lean(client, prompt, gen_model, code_model, reason_model)
+            _write(output_path, answers)
+            return
         model, budget = route(prompt)
         primary = ""
         try:
@@ -146,6 +155,54 @@ def _client(key, base):
 
 
 _THINK = re.compile(r"(?s)<(?:think|thought)>.*?(?:</(?:think|thought)>|\Z)\s*")
+
+# Lean-mode category prompts: terse (input tokens bill) but intent-complete.
+_LEAN = {
+    "factual":       ("English only. Answer accurately and completely; under 120 words.", 300),
+    "math":          ("English only. Brief steps, then 'Answer: <value>' on its own line.", 400),
+    "sentiment":     ("English only. State the sentiment label, then one short justification.", 120),
+    "summarization": ("English only. Output only the summary; obey any stated length or format constraint.", 220),
+    "ner":           ("English only. List each entity as 'label: value', one per line; labels: person, organization, location, date.", 260),
+    "logic":         ("English only. Deduce in brief numbered steps checking every constraint, then 'Answer: <value>' on its own line.", 420),
+    "code_debug":    ("English only. Name the bug in one sentence, then the corrected code in one fenced block.", 560),
+    "code_gen":      ("English only. Output only the code in one fenced block, correct and self-contained.", 560),
+}
+
+
+def _solve_lean(client, prompt, gen_model, code_model, reason_model):
+    from .classify import classify as _classify
+    from .solvers import solve_any
+    from .tasks import Task
+
+    hit = solve_any(prompt)
+    if hit is not None:
+        return hit[0]  # proven-correct deterministic answer: zero tokens
+    cat = _classify(Task(id="x", input=prompt))
+    system, cap = _LEAN.get(cat, _LEAN["factual"])
+    model = code_model if cat in ("code_debug", "code_gen") else (
+        reason_model if cat in ("math", "logic") else gen_model)
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": prompt}],
+            temperature=0.0, max_tokens=cap,
+            extra_body={"reasoning_effort": "none"},
+        )
+        return _THINK.sub("", (resp.choices[0].message.content or "").strip()).strip()
+    except Exception:
+        # effort param rejected or transient: one plain retry on the general model
+        try:
+            resp = client.chat.completions.create(
+                model=gen_model,
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": prompt}],
+                temperature=0.0, max_tokens=cap,
+            )
+            return _THINK.sub("", (resp.choices[0].message.content or "").strip()).strip()
+        except Exception:
+            return ""
+
 
 REFEREE_SYSTEM = (
     "You are a meticulous grader consolidating two candidate answers to a task. "
