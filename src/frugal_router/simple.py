@@ -159,19 +159,36 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
             except Exception as exc:
                 print(f"task {tid} second opinion failed: {type(exc).__name__}", file=sys.stderr)
 
-        final = primary or second
-        if ensemble and primary and second and primary != second:
+        # Self-consistency on the hard reasoning categories: one more
+        # independent sample from the reasoning model at a nonzero temperature.
+        # A single greedy sample is exactly where a hard puzzle whiffs; a third
+        # candidate gives the referee a majority signal. SELF_CONSISTENCY=0
+        # disables. Applied only when the task routed to the reasoning model.
+        third = ""
+        if ensemble and model == reason_model and os.environ.get("SELF_CONSISTENCY", "1") != "0":
             try:
-                final = _referee(client, referee_model, prompt, primary, second) or final
+                third = _call(client, model, prompt, budget, temperature=0.7)
+            except Exception as exc:
+                print(f"task {tid} third sample failed: {type(exc).__name__}", file=sys.stderr)
+
+        candidates = [c for c in (primary, second, third) if c.strip()]
+        final = candidates[0] if candidates else ""
+        if ensemble and len(set(candidates)) > 1:
+            try:
+                final = _referee(client, referee_model, prompt, *candidates) or final
             except Exception as exc:
                 print(f"task {tid} referee failed: {type(exc).__name__}", file=sys.stderr)
 
         if not final.strip():
-            # a truncated/empty reply is a guaranteed zero; one retry on general
-            try:
-                final = _call(client, gen_model, prompt, per_task_max_tokens)
-            except Exception:
-                pass
+            # a truncated/empty reply is a guaranteed zero; retry the other
+            # families before giving up (a lone timeout must not cost the task)
+            for fb_model in (alt_model, gen_model):
+                try:
+                    final = _call(client, fb_model, prompt, per_task_max_tokens)
+                except Exception:
+                    final = ""
+                if final.strip():
+                    break
 
         # Answer normalization is opt-in only: scored evidence showed shape
         # rewriting (an appended Answer line built from the last number, code
@@ -274,8 +291,11 @@ REFEREE_SYSTEM = (
 )
 
 
-def _referee(client, model, prompt, a, b):
-    user = f"TASK:\n{prompt}\n\nCANDIDATE 1:\n{a}\n\nCANDIDATE 2:\n{b}\n\nFinal answer:"
+def _referee(client, model, prompt, *candidates):
+    blocks = "\n\n".join(
+        f"CANDIDATE {i}:\n{c}" for i, c in enumerate(candidates, 1)
+    )
+    user = f"TASK:\n{prompt}\n\n{blocks}\n\nFinal answer:"
     resp = client.chat.completions.create(
         model=model,
         messages=[{"role": "system", "content": REFEREE_SYSTEM}, {"role": "user", "content": user}],
@@ -286,11 +306,11 @@ def _referee(client, model, prompt, a, b):
     return _THINK.sub("", text).strip()
 
 
-def _call(client, model, prompt, max_tokens):
+def _call(client, model, prompt, max_tokens, temperature=0.0):
     resp = client.chat.completions.create(
         model=model,
         messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
-        temperature=0.0,
+        temperature=temperature,
         max_tokens=max_tokens,
     )
     text = (resp.choices[0].message.content or "").strip()
