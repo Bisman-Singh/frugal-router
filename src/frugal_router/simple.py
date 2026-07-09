@@ -160,7 +160,7 @@ _THINK = re.compile(r"(?s)<(?:think|thought)>.*?(?:</(?:think|thought)>|\Z)\s*")
 _LEAN = {
     "factual":       ("English only. Answer accurately and completely; under 120 words.", 300),
     "math":          ("English only. Brief steps, then 'Answer: <value>' on its own line.", 400),
-    "sentiment":     ("English only. State the sentiment label, then one short justification.", 120),
+    "sentiment":     ("English only. Label the sentiment positive, negative, or neutral, then one short justification.", 120),
     "summarization": ("English only. Output only the summary; obey any stated length or format constraint.", 220),
     "ner":           ("English only. List each entity as 'label: value', one per line; labels: person, organization, location, date.", 260),
     "logic":         ("English only. Deduce in brief numbered steps checking every constraint, then 'Answer: <value>' on its own line.", 420),
@@ -174,13 +174,23 @@ def _solve_lean(client, prompt, gen_model, code_model, reason_model):
     from .solvers import solve_any
     from .tasks import Task
 
-    hit = solve_any(prompt)
-    if hit is not None:
-        return hit[0]  # proven-correct deterministic answer: zero tokens
+    if os.environ.get("SOLVERS", "0") == "1":
+        hit = solve_any(prompt)
+        if hit is not None:
+            return hit[0]  # proven-correct deterministic answer: zero tokens
     cat = _classify(Task(id="x", input=prompt))
     system, cap = _LEAN.get(cat, _LEAN["factual"])
-    model = code_model if cat in ("code_debug", "code_gen") else (
-        reason_model if cat in ("math", "logic") else gen_model)
+    # Passer-validated tiering: the strong general model handles math/logic at
+    # reasoning-effort none (a reasoning model with reasoning suppressed is
+    # crippled; a strong non-reasoning model is not). Light model for the three
+    # classification-style categories, code specialist for code.
+    cheap_model = _pick(os.environ.get("ALLOWED_MODELS", "").split(","), ["a4b"]) or gen_model
+    if cat in ("code_debug", "code_gen"):
+        model = code_model
+    elif cat in ("sentiment", "summarization", "ner"):
+        model = cheap_model
+    else:
+        model = gen_model
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -254,10 +264,19 @@ def _read(input_path, answers):
     return tasks
 
 
+_write_lock = __import__("threading").Lock()
+
+
 def _write(output_path, answers):
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    results = [{"task_id": k, "answer": v} for k, v in answers.items()]
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    # Thread-safe atomic write: unique temp per writer, serialized replace.
+    # Concurrent workers sharing one temp name can collide and crash the run.
+    try:
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        results = [{"task_id": k, "answer": v} for k, v in answers.items()]
+        with _write_lock:
+            tmp = path.with_name(f".{path.name}.{os.getpid()}.{__import__('threading').get_ident()}.tmp")
+            tmp.write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, path)
+    except Exception as exc:
+        print(f"write failed (will retry on next flush): {exc}", file=__import__("sys").stderr)
