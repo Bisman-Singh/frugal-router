@@ -265,19 +265,26 @@ def _solve_lean(client, prompt, gen_model, code_model, reason_model):
         out = ""
     if out:
         return out
-    # Blank or errored (effort param rejected, truncation, transient): a blank
-    # answer is a guaranteed zero, so retry once on the strong general model with
-    # a fuller budget and no effort override.
-    try:
-        resp = client.chat.completions.create(
-            model=gen_model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": prompt}],
-            temperature=0.0, max_tokens=max(cap, 800),
-        )
-        return _THINK.sub("", (resp.choices[0].message.content or "").strip()).strip()
-    except Exception:
-        return ""
+    # Blank or errored (model not deployed, effort param rejected, truncation,
+    # transient): a blank answer is a guaranteed zero. Retry on the strong
+    # general model with reasoning suppressed first — if that model reasons and
+    # the suppression is dropped, a small cap fills with hidden thinking and
+    # returns blank — then once more plain with a budget big enough to think in.
+    for extra, fb_cap in (({"reasoning_effort": "none"}, max(cap, 800)), (None, 1600)):
+        try:
+            kwargs = dict(model=gen_model,
+                          messages=[{"role": "system", "content": system},
+                                    {"role": "user", "content": prompt}],
+                          temperature=0.0, max_tokens=fb_cap)
+            if extra:
+                kwargs["extra_body"] = extra
+            resp = client.chat.completions.create(**kwargs)
+            out = _THINK.sub("", (resp.choices[0].message.content or "").strip()).strip()
+            if out:
+                return out
+        except Exception:
+            continue
+    return ""
 
 
 REFEREE_SYSTEM = (
