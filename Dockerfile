@@ -23,3 +23,7 @@ COPY models ./models
 
 ENTRYPOINT ["frugal"]
 CMD ["simple"]
+
+# v11 lean tag bakes LEAN=1 via build-arg
+ARG LEAN=0
+ENV LEAN=$LEAN
