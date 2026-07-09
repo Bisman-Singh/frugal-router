@@ -68,6 +68,22 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
     if not tasks:
         return 0
 
+    # Deterministic solvers need no API: run them before the credential check
+    # so every provable task is answered even if the environment is broken.
+    if os.environ.get("SOLVERS", "1") != "0":
+        from .solvers import solve_any as _solve_any
+
+        for tid, prompt in tasks:
+            hit = _solve_any(prompt)
+            if hit is not None:
+                answers[tid] = hit[0]
+        if any(answers.values()):
+            _write(output_path, answers)
+        tasks = [(tid, p) for tid, p in tasks if not answers.get(tid)]
+        if not tasks:
+            _write(output_path, answers)
+            return 0
+
     key = os.environ.get("FIREWORKS_API_KEY")
     base = os.environ.get("FIREWORKS_BASE_URL") or "https://api.fireworks.ai/inference/v1"
     allowed = [m.strip() for m in os.environ.get("ALLOWED_MODELS", "").split(",") if m.strip()]
