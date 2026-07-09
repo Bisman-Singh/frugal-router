@@ -84,12 +84,15 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
     reason_model = _pick(allowed, _REASON_MODELS)
 
     def route(prompt: str) -> tuple[str, int]:
+        # Budgets sized so one generation finishes inside the harness's 30s
+        # per-request rule; an uncapped reasoning run can exceed it and come
+        # back truncated or blank on exactly the hard tasks.
         if _CODE_HINT.search(prompt):
-            return code_model, 6000
+            return code_model, 3000
         if _REASON_HINT.search(prompt):
-            # Reasoning model, reasoning left ON, room for thought + answer.
-            return reason_model, 8000
-        return gen_model, 4000
+            # Reasoning model, reasoning left ON but bounded.
+            return reason_model, 3000
+        return gen_model, 2500
 
     # LEAN=1: token-war mode. Zero-token classification + deterministic solvers
     # answer provable math/logic free; every other task is ONE call with a terse
@@ -103,11 +106,28 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
     referee_model = _pick(allowed, ["gemma-4-26b-a4b", "gemma", "minimax"])
 
     def solve(task):
+        from .classify import classify as _classify
+        from .normalize import normalize
+        from .solvers import solve_any
+        from .tasks import Task
+
         tid, prompt = task
         if lean:
             answers[tid] = _solve_lean(client, prompt, gen_model, code_model, reason_model)
             _write(output_path, answers)
             return
+
+        # Deterministic solvers run first: prove-or-defer means a hit is exact
+        # by construction (zero tokens, no format risk); anything unproven
+        # falls through to the ensemble. SOLVERS=0 disables.
+        if os.environ.get("SOLVERS", "1") != "0":
+            hit = solve_any(prompt)
+            if hit is not None:
+                answers[tid] = hit[0]
+                _write(output_path, answers)
+                return
+
+        category = _classify(Task(id=tid, input=prompt))
         model, budget = route(prompt)
         primary = ""
         try:
@@ -131,12 +151,18 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
                 print(f"task {tid} referee failed: {type(exc).__name__}", file=sys.stderr)
 
         if not final.strip():
-            # a truncated/empty reply is a guaranteed zero; one retry on general
-            try:
-                final = _call(client, gen_model, prompt, per_task_max_tokens)
-            except Exception:
-                pass
-        answers[tid] = final
+            # A truncated/empty reply is a guaranteed zero. The likely cause is
+            # a reasoning generation cut by the per-request time limit, so the
+            # retry goes to the non-reasoning alternate with a tight cap.
+            for fb_model in (alt_model, gen_model):
+                try:
+                    final = _call(client, fb_model, prompt, 800)
+                except Exception:
+                    final = ""
+                if final.strip():
+                    break
+
+        answers[tid] = normalize(category, final)
         _write(output_path, answers)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -151,7 +177,9 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
 def _client(key, base):
     from openai import OpenAI
 
-    return OpenAI(api_key=key, base_url=base, timeout=55.0, max_retries=1)
+    # 28s: the harness rule is <30s per request; a call that would run longer
+    # is better cut client-side so the fallback path still fits the window.
+    return OpenAI(api_key=key, base_url=base, timeout=28.0, max_retries=1)
 
 
 _THINK = re.compile(r"(?s)<(?:think|thought)>.*?(?:</(?:think|thought)>|\Z)\s*")
@@ -191,6 +219,7 @@ def _solve_lean(client, prompt, gen_model, code_model, reason_model):
         model = cheap_model
     else:
         model = gen_model
+    out = ""
     try:
         resp = client.chat.completions.create(
             model=model,
@@ -199,19 +228,24 @@ def _solve_lean(client, prompt, gen_model, code_model, reason_model):
             temperature=0.0, max_tokens=cap,
             extra_body={"reasoning_effort": "none"},
         )
+        out = _THINK.sub("", (resp.choices[0].message.content or "").strip()).strip()
+    except Exception:
+        out = ""
+    if out:
+        return out
+    # Blank or errored (effort param rejected, truncation, transient): a blank
+    # answer is a guaranteed zero, so retry once on the strong general model with
+    # a fuller budget and no effort override.
+    try:
+        resp = client.chat.completions.create(
+            model=gen_model,
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": prompt}],
+            temperature=0.0, max_tokens=max(cap, 800),
+        )
         return _THINK.sub("", (resp.choices[0].message.content or "").strip()).strip()
     except Exception:
-        # effort param rejected or transient: one plain retry on the general model
-        try:
-            resp = client.chat.completions.create(
-                model=gen_model,
-                messages=[{"role": "system", "content": system},
-                          {"role": "user", "content": prompt}],
-                temperature=0.0, max_tokens=cap,
-            )
-            return _THINK.sub("", (resp.choices[0].message.content or "").strip()).strip()
-        except Exception:
-            return ""
+        return ""
 
 
 REFEREE_SYSTEM = (
@@ -231,10 +265,11 @@ def _referee(client, model, prompt, a, b):
         model=model,
         messages=[{"role": "system", "content": REFEREE_SYSTEM}, {"role": "user", "content": user}],
         temperature=0.0,
-        max_tokens=8000,
+        max_tokens=2500,  # consolidation, not fresh reasoning: fits the 30s rule
     )
     text = (resp.choices[0].message.content or "").strip()
-    return _THINK.sub("", text).strip()
+    stripped = _THINK.sub("", text).strip()
+    return stripped if stripped else text
 
 
 def _call(client, model, prompt, max_tokens):
@@ -245,7 +280,11 @@ def _call(client, model, prompt, max_tokens):
         max_tokens=max_tokens,
     )
     text = (resp.choices[0].message.content or "").strip()
-    return _THINK.sub("", text).strip()
+    # Non-destructive strip: a reply that is ALL think-block (budget spent
+    # reasoning) keeps its raw text rather than degrading to empty — a partial
+    # answer can still score, an empty one cannot.
+    stripped = _THINK.sub("", text).strip()
+    return stripped if stripped else text
 
 
 def _read(input_path, answers):
