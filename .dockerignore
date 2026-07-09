@@ -6,6 +6,7 @@
 # Drafts are off by default, so GGUF weights are dead image weight.
 # Comment this line to bake a local model when use_draft is enabled.
 models/*.gguf
+models/*.gguf.*
 runs
 artifacts
 tests
