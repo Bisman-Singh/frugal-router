@@ -173,7 +173,13 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
             except Exception:
                 pass
 
-        answers[tid] = normalize(category, final)
+        # Answer normalization is opt-in only: scored evidence showed shape
+        # rewriting (an appended Answer line built from the last number, code
+        # reduced to its first fence) flips correct answers to wrong far more
+        # often than it repairs mis-shaped ones. NORMALIZE=1 re-enables.
+        if os.environ.get("NORMALIZE", "0") == "1":
+            final = normalize(category, final)
+        answers[tid] = final
         _write(output_path, answers)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
