@@ -19,12 +19,19 @@ def main():
     ap.add_argument("--out", default="./tuned")
     ap.add_argument("--epochs", type=float, default=1.0)
     ap.add_argument("--lr", type=float, default=1e-4)
-    ap.add_argument("--batch", type=int, default=32)
+    ap.add_argument("--batch", type=int, default=0, help="0 = auto by VRAM")
+    ap.add_argument("--load-4bit", action="store_true", help="QLoRA (needed on <=16GB)")
     ap.add_argument("--resume", default=None)
     args = ap.parse_args()
 
     from unsloth import FastLanguageModel
     import torch
+
+    vram = torch.cuda.get_device_properties(0).total_memory / 1e9 if torch.cuda.is_available() else 0
+    load_4bit = args.load_4bit or vram < 24
+    batch = args.batch or (8 if vram < 24 else 32)
+    grad_accum = 4 if vram < 24 else 1
+    print(f"GPU VRAM ~{vram:.0f}GB -> 4bit={load_4bit} batch={batch} grad_accum={grad_accum}")
     from datasets import Dataset
     from trl import SFTConfig, SFTTrainer
 
@@ -32,7 +39,7 @@ def main():
         model_name=args.base,
         max_seq_length=1024,
         dtype=torch.bfloat16,
-        load_in_4bit=False,   # full-precision LoRA: MI300 has the room
+        load_in_4bit=load_4bit,
     )
     tok = getattr(tok, "tokenizer", tok)  # Qwen3.5 returns a multimodal processor
     model = FastLanguageModel.get_peft_model(
@@ -56,8 +63,8 @@ def main():
     cfg = SFTConfig(
         output_dir=args.out,
         num_train_epochs=args.epochs,
-        per_device_train_batch_size=args.batch,
-        gradient_accumulation_steps=1,
+        per_device_train_batch_size=batch,
+        gradient_accumulation_steps=grad_accum,
         learning_rate=args.lr,
         lr_scheduler_type="cosine",
         warmup_ratio=0.03,
