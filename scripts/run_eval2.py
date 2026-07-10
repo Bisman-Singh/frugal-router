@@ -261,9 +261,22 @@ def grade(task: dict, answer: str) -> bool:
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as fh:
             fh.write(code + "\n\n" + checks + "\nprint('PASS')\n")
             path = fh.name
+
+        def _limits():  # model-generated code is untrusted: cage it
+            import resource
+            resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
+            resource.setrlimit(resource.RLIMIT_AS, (512 << 20, 512 << 20))
+            resource.setrlimit(resource.RLIMIT_NOFILE, (16, 16))
+            resource.setrlimit(resource.RLIMIT_FSIZE, (1 << 20, 1 << 20))
+
         try:
-            proc = subprocess.run([sys.executable, path], capture_output=True,
-                                  text=True, timeout=6)
+            # -I: isolated mode (no site, no env hooks); env={}: no secrets;
+            # rlimits: no CPU/memory/file abuse. Network isolation still needs
+            # a container - do not run this against untrusted models outside one.
+            proc = subprocess.run([sys.executable, "-I", path],
+                                  capture_output=True, text=True, timeout=6,
+                                  env={}, cwd=tempfile.gettempdir(),
+                                  preexec_fn=_limits)
             return proc.returncode == 0 and "PASS" in proc.stdout
         except Exception:
             return False
