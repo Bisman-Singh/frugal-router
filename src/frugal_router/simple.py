@@ -103,8 +103,7 @@ def validate(category: str, prompt: str, answer: str) -> str | None:
 
     if category == "math":
         m = _ANSWER_LINE.search(a)
-        tail_number = re.search(r"-?\d[\d,]*(?:\.\d+)?", (m.group(1) if m else a[-80:]))
-        if not tail_number:
+        if not m or not re.search(r"-?\d[\d,]*(?:\.\d+)?", m.group(1)):
             return "end with 'Answer: <numeric value>' on its own line"
 
     elif category == "sentiment":
@@ -151,8 +150,15 @@ def validate(category: str, prompt: str, answer: str) -> str | None:
 
     elif category == "logic":
         if re.search(r"(?i)\b(yes or no|true or false)\b", prompt):
-            if not re.search(r"\b(yes|no|true|false)\b", low):
-                return "state the final yes/no answer explicitly"
+            m = _ANSWER_LINE.search(a)
+            scope = (m.group(1) if m else a).lower()
+            found = {w for w in ("yes", "no", "true", "false")
+                     if re.search(rf"\b{w}\b", scope)}
+            # Without an explicit Answer line, a bare fragment ("no idea") is
+            # not a committed answer - demand substance alongside the label.
+            if len(found) != 1 or (not m and len(a.split()) < 4):
+                return ("commit to exactly one final answer: end with "
+                        "'Answer: yes' or 'Answer: no' on its own line")
         elif not _ANSWER_LINE.search(a):
             return "end with 'Answer: <value>' on its own line"
 
@@ -253,17 +259,20 @@ def _call(client, task_id, category, model, system, prompt, max_tokens, attempt,
 # ------------------------------------------------------------------- solve --
 
 
-def _confirm_hard_answer(client, task_id, category, prompt, chain, answer, wall):
+def _confirm_hard_answer(client, task_id, category, prompt, chain, answer,
+                         answered_by, wall):
     """Math/logic answers that LOOK right still get one reasoning-mode second
-    opinion. Agreement -> keep the primary text. Disagreement -> cross-model
-    tiebreak; the majority's own full text is emitted, never a rewrite."""
+    opinion — run on the model that actually produced the answer (the head of
+    the chain may be the model that just failed). Agreement -> keep the
+    primary text. Disagreement -> tiebreak from a DIFFERENT healthy model; the
+    majority's own full text is emitted, never a rewrite."""
     system, budget = CONTRACTS[category]
     primary_val = _final_value(category, answer)
-    if primary_val is None or time.monotonic() > wall - 40:
+    if primary_val is None or time.monotonic() > wall - 60:
         return answer
 
     try:
-        confirm = _call(client, task_id, category, chain[0], system, prompt,
+        confirm = _call(client, task_id, category, answered_by, system, prompt,
                         max(budget * 3, 4000), attempt=90, effort=None)
     except Exception:
         return answer
@@ -273,9 +282,10 @@ def _confirm_hard_answer(client, task_id, category, prompt, chain, answer, wall)
 
     # Disagreement: a third opinion from a different model family breaks it.
     tiebreak, tiebreak_val = "", None
-    if len(chain) > 1 and time.monotonic() < wall - 30:
+    others = [m for m in chain if m != answered_by]
+    if others and time.monotonic() < wall - 45:
         try:
-            tiebreak = _call(client, task_id, category, chain[1], system, prompt,
+            tiebreak = _call(client, task_id, category, others[0], system, prompt,
                              budget, attempt=91)
             tiebreak_val = _final_value(category, tiebreak)
         except Exception:
@@ -303,7 +313,11 @@ def _solve_task(client, task_id, prompt, category, chain, wall):
     for i, (model, cap) in enumerate(plan):
         if i == 1 and requirement is None:
             continue  # primary validated: corrective slot unused
-        if time.monotonic() > wall - 25:
+        # Margin: a request can cost timeout x (1 + SDK retry). The first
+        # attempt gets a slimmer allowance (something beats a guaranteed
+        # blank); later attempts must clear the full worst case.
+        remaining = wall - time.monotonic()
+        if remaining < (40 if i == 0 else 80):
             break     # leave room for the flush; a partial beats a blank batch
         ask = prompt if not requirement else f"{prompt}\n\nRequirement: {requirement}."
         try:
@@ -316,7 +330,7 @@ def _solve_task(client, task_id, prompt, category, chain, wall):
         if problem is None:
             if category in ("math", "logic"):
                 return _confirm_hard_answer(client, task_id, category, prompt,
-                                            chain, answer, wall)
+                                            chain, answer, model, wall)
             return answer
         requirement = problem
     return first_nonempty
@@ -359,7 +373,13 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
     key = os.environ.get("FIREWORKS_API_KEY")
     base = os.environ.get("FIREWORKS_BASE_URL") or "https://api.fireworks.ai/inference/v1"
     allowed_all = [m.strip() for m in os.environ.get("ALLOWED_MODELS", "").split(",") if m.strip()]
-    allowed = [m for m in allowed_all if not _NON_CHAT.search(m)] or allowed_all
+    allowed = [m for m in allowed_all if not _NON_CHAT.search(m)]
+    if allowed_all and not allowed:
+        # Fail closed: calling a non-chat model is a guaranteed failure that
+        # can also invalidate the submission. Solver answers stand; the rest
+        # are preserved (and loudly logged) rather than burned on a bad call.
+        print(f"ERROR: no chat-capable model in ALLOWED_MODELS={allowed_all}",
+              file=sys.stderr)
 
     if tasks and key and allowed:
         from .backends.fireworks import normalize_base_url  # noqa
@@ -368,7 +388,8 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
 
         client = _client(key, normalize_base_url(base))
         general_hints = [h.strip() for h in os.environ.get(
-            "GENERAL_HINTS", "minimax,gemma-4-31b-it,gemma").split(",") if h.strip()]
+            "GENERAL_HINTS",
+            "minimax,kimi-k2p7-code,kimi,gemma-4-31b-it,gemma").split(",") if h.strip()]
         gen_model = _pick(allowed, general_hints) or allowed[0]
         code_model = _pick(allowed, _CODE_MODELS) or gen_model
         extra_model = _pick(allowed, _OPPORTUNISTIC)

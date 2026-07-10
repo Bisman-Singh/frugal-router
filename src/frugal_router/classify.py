@@ -75,6 +75,9 @@ _KEYWORDS: dict[str, list[str]] = {
         r"\brecap\b", r"\bbrief overview\b", r"\bsum(marize)? up\b",
     ],
     "logic": [
+        r"\byes or no\b", r"\btrue or false\b",
+        # two quantified statements back to back = a syllogism
+        r"\ball \w+ are \w+[,.;]? ?(all|some|no) \w+ are\b",
         r"\bpuzzle\b", r"\briddle\b",
         r"\bwho (is|are|owns?|sits?|lives?|has|had|drinks?|wears?|likes?|finished|won|did it)\b",
         r"\bif and only if\b", r"\bexactly one\b", r"\bat least one\b", r"\bat most one\b",
