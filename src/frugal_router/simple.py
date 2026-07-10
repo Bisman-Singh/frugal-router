@@ -147,7 +147,9 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
         model, budget = route(prompt)
         primary = ""
         try:
-            primary = _call(client, model, prompt, budget)
+            # Primary runs with reasoning suppressed: the gate-clearing configs
+            # all do, and a clean direct answer cannot be polluted by monologue.
+            primary = _call(client, model, prompt, budget, effort="none")
         except Exception as exc:
             print(f"task {tid} failed on {model}: {type(exc).__name__}", file=sys.stderr)
 
@@ -160,10 +162,9 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
                 print(f"task {tid} second opinion failed: {type(exc).__name__}", file=sys.stderr)
 
         # Self-consistency on the hard reasoning categories: one more
-        # independent sample from the reasoning model at a nonzero temperature.
-        # A single greedy sample is exactly where a hard puzzle whiffs; a third
-        # candidate gives the referee a majority signal. SELF_CONSISTENCY=0
-        # disables. Applied only when the task routed to the reasoning model.
+        # independent sample from the reasoning model, this one with reasoning
+        # LEFT ON — it thinks differently than the suppressed primary, so the
+        # referee sees genuinely diverse candidates. SELF_CONSISTENCY=0 disables.
         third = ""
         if ensemble and model == reason_model and os.environ.get("SELF_CONSISTENCY", "1") != "0":
             try:
@@ -313,15 +314,45 @@ def _referee(client, model, prompt, *candidates):
     return _THINK.sub("", text).strip()
 
 
-def _call(client, model, prompt, max_tokens, temperature=0.0):
-    resp = client.chat.completions.create(
+_UNCLOSED_THINK = re.compile(r"(?i)<(?:think|thought)>(?!.*</(?:think|thought)>)", re.DOTALL)
+_TRAILING_CLOSE = re.compile(r"(?is)^.*?</(?:think|thought)>\s*")
+
+
+def _call(client, model, prompt, max_tokens, temperature=0.0, effort=None):
+    """One completion. Reasoning is suppressed when `effort` is set: hidden
+    monologue glued into content pollutes the judged answer even when the real
+    answer inside it is correct, and on hard prompts it can eat the entire
+    budget before an answer is written."""
+    kwargs = dict(
         model=model,
         messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
         temperature=temperature,
         max_tokens=max_tokens,
     )
+    if effort:
+        kwargs["extra_body"] = {"reasoning_effort": effort}
+    try:
+        resp = client.chat.completions.create(**kwargs)
+    except Exception as exc:
+        # Models that reject the reasoning knob get one plain retry.
+        if effort and any(s in str(exc).lower() for s in
+                          ("reasoning_effort", "unsupported", "unknown parameter", "extra")):
+            kwargs.pop("extra_body", None)
+            resp = client.chat.completions.create(**kwargs)
+        else:
+            raise
     text = (resp.choices[0].message.content or "").strip()
-    return _THINK.sub("", text).strip()
+    if _UNCLOSED_THINK.search(text):
+        # Cut off mid-reasoning: there is no answer in this response at all.
+        # Retry once with reasoning suppressed so the budget goes to the answer.
+        if not effort:
+            return _call(client, model, prompt, max_tokens, temperature, effort="none")
+        return ""
+    stripped = _THINK.sub("", text).strip()
+    # A stray closing tag with no opening tag: everything before it is thought.
+    if re.search(r"(?i)</(?:think|thought)>", stripped):
+        stripped = _TRAILING_CLOSE.sub("", stripped).strip()
+    return stripped
 
 
 def _read(input_path, answers):
