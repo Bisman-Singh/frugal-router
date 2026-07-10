@@ -4,7 +4,7 @@
 set -uo pipefail
 
 echo "== deps (CUDA Unsloth) =="
-[ -n "${HF_TOKEN:-}" ] && python -c "from huggingface_hub import login,os; login(os.environ['HF_TOKEN'])" 2>/dev/null && echo "HF authenticated"
+[ -n "${HF_TOKEN:-}" ] && python -c "import os; from huggingface_hub import login; login(token=os.environ['HF_TOKEN'])" 2>/dev/null && echo "HF authenticated"
 pip install -q "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null || pip install -q unsloth
 pip install -q "transformers>=4.51" trl peft datasets accelerate sentencepiece gguf || exit 1
 
