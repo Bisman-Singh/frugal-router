@@ -414,6 +414,21 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
     total = len(tasks)
     solver_hits = 0
 
+    # Watchdog first: EVERYTHING after this line (solvers, the local tier,
+    # remote calls) runs under the wall. A wedged local generation before the
+    # remote branch used to run unguarded - that is a TIMEOUT verdict.
+    def _watchdog():
+        time.sleep(max(5.0, wall - time.monotonic()))
+        empty = [t for t, a in answers.items() if not a.strip()]
+        if empty:
+            print(f"watchdog: {len(empty)} unanswered at the wall: {empty}",
+                  file=sys.stderr)
+        _write(output_path, answers)
+        _write_ledger(output_path, total, solver_hits, started)
+        os._exit(0)
+
+    threading.Thread(target=_watchdog, daemon=True).start()
+
     if os.environ.get("SOLVERS", "1") != "0":
         from .solvers import solve_any
 
