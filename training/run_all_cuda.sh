@@ -18,10 +18,9 @@ PY
 )
 echo "base: $BASE"
 
-echo "== dataset (train splits + your distilled gold) =="
+echo "== dataset (BIG builder: real benchmarks via load_dataset; 20k, ~1.8h on 1x T4) =="
 rm -f sft.jsonl   # ALWAYS rebuild; never trust a committed/cached sft.jsonl
-python build_dataset_v2.py --out sft.jsonl --target 9000 || exit 1
-[ -f distill.jsonl ] && { cat distill.jsonl >> sft.jsonl; echo "merged distilled gold"; }
+python build_dataset_big.py --out sft.jsonl --target 20000 || exit 1  # merges distill + asserts >=20k
 echo "dataset lines: $(wc -l < sft.jsonl)"
 
 echo "== train (QLoRA, T4-sized, checkpointed) =="
