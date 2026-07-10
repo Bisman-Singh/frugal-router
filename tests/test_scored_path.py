@@ -211,3 +211,65 @@ def test_solvers_zero_token_path(tmp_path, monkeypatch):
     results = {r["task_id"]: r["answer"] for r in json.loads(outp.read_text())}
     assert results["s1"] == "36"
     assert results["s2"] == "Carol"
+
+
+def test_math_without_answer_line_is_rejected_and_reasked(env):
+    """'I considered 3 cases.' must not pass math validation on digits alone."""
+    state = {"n": 0}
+
+    def script(body):
+        state["n"] += 1
+        if state["n"] == 1:
+            return 200, "I considered 3 cases.", "stop"
+        return 200, "Recomputing: 6 x 4 = 24, 25 - 24 = 1.\nAnswer: 1", "stop"
+    _Mock.script = staticmethod(script)
+
+    results, _ = env([{"task_id": "m3",
+                       "prompt": "Notebooks cost $4. Buying 6 with a $25 card, how much remains?"}])
+    assert "Answer: 1" in results["m3"]
+    assert state["n"] >= 2, "invalid math answer must trigger a re-ask"
+
+
+def test_logic_hedged_both_labels_rejected(env):
+    state = {"n": 0}
+
+    def script(body):
+        state["n"] += 1
+        if state["n"] == 1:
+            return 200, "It might be yes or maybe no.", "stop"
+        return 200, "Transitivity applies.\nAnswer: yes", "stop"
+    _Mock.script = staticmethod(script)
+
+    results, _ = env([{"task_id": "l2",
+                       "prompt": "All wumps are glorks. All glorks are zeps. Yes or no: are all wumps zeps?"}])
+    tail = results["l2"].split("Answer:")[-1].lower()
+    assert "yes" in tail and "maybe" not in tail
+    assert state["n"] >= 2
+
+
+def test_confirmation_runs_on_answering_model_after_outage(env):
+    """minimax down; kimi answers the math task; the reasoning confirmation
+    must go to kimi (the answering model), never back to dead minimax."""
+    def script(body):
+        if "minimax" in body["model"]:
+            return 404, None, None
+        return 200, "6 x 4 = 24; 25 - 24 = 1.\nAnswer: 1", "stop"
+    _Mock.script = staticmethod(script)
+
+    results, _ = env([{"task_id": "m4",
+                       "prompt": "Notebooks cost $4. Buying 6 with a $25 card, how much remains?"}])
+    assert "Answer: 1" in results["m4"]
+    # after kimi's accepted answer, no further calls may target minimax
+    answered_at = next(i for i, c in enumerate(_Mock.calls) if "kimi" in c["model"])
+    assert all("minimax" not in c["model"] for c in _Mock.calls[answered_at + 1:])
+
+
+def test_all_non_chat_models_fail_closed(env, tmp_path, monkeypatch):
+    import os as _os
+    _os.environ["ALLOWED_MODELS"] = "flux-1-schnell,whisper-v3,stable-image-core"
+    try:
+        results, _ = env([{"task_id": "q1", "prompt": "Explain gravity."}])
+    finally:
+        _os.environ["ALLOWED_MODELS"] = ALLOWED
+    assert results["q1"] == ""          # preserved blank, not a doomed call
+    assert len(_Mock.calls) == 0        # zero requests to non-chat models
