@@ -420,6 +420,42 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
             _write(output_path, answers)
         tasks = [(tid, p) for tid, p in tasks if not answers.get(tid)]
 
+    # Local tier runs as a bounded SEQUENTIAL pre-pass (like the solvers):
+    # cheapest categories first, wall margin and the cumulative time budget
+    # re-checked between tasks, and the remote pool afterwards gets full
+    # parallelism for everything the tier skipped or rejected. Locals must
+    # never queue inside pool workers - that serializes the whole run.
+    if tasks and os.environ.get("LOCAL", "0") == "1":
+        from . import local_tier
+        from .classify import classify as _classify0
+        from .tasks import Task as _Task0
+
+        if local_tier.available():
+            cheap_first = {"sentiment": 0, "summarization": 1, "ner": 2, "factual": 3}
+            cats = {}
+            for tid, prompt in tasks:
+                try:
+                    cats[tid] = _classify0(_Task0(id=tid, input=prompt))
+                except Exception:
+                    cats[tid] = "factual"
+            handled = 0
+            for tid, prompt in sorted(tasks, key=lambda t: cheap_first.get(cats[t[0]], 9)):
+                if cats[tid] not in local_tier.CATEGORIES:
+                    continue
+                try:
+                    local = _try_local(tid, cats[tid], prompt, wall)
+                except Exception as exc:
+                    print(f"task {tid} local tier: {type(exc).__name__}", file=sys.stderr)
+                    local = None
+                if local is not None:
+                    answers[tid] = local
+                    handled += 1
+                    _write(output_path, answers)
+            if handled:
+                print(f"local tier answered {handled} task(s) in "
+                      f"{_LOCAL_SPENT['s']:.0f}s", file=sys.stderr)
+            tasks = [(tid, p) for tid, p in tasks if not answers.get(tid)]
+
     key = os.environ.get("FIREWORKS_API_KEY")
     base = os.environ.get("FIREWORKS_BASE_URL") or "https://api.fireworks.ai/inference/v1"
     allowed_all = [m.strip() for m in os.environ.get("ALLOWED_MODELS", "").split(",") if m.strip()]
@@ -463,16 +499,6 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
                 category = _classify(Task(id=tid, input=prompt))
             except Exception:
                 category = "factual"
-            if os.environ.get("LOCAL", "0") == "1":
-                try:
-                    local = _try_local(tid, category, prompt, wall)
-                except Exception as exc:
-                    print(f"task {tid} local tier: {type(exc).__name__}", file=sys.stderr)
-                    local = None
-                if local is not None:
-                    answers[tid] = local
-                    _write(output_path, answers)
-                    return
             try:
                 answers[tid] = _solve_task(client, tid, prompt, category,
                                            chain_for(category), wall)
