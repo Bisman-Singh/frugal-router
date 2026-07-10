@@ -31,14 +31,15 @@ def main():
     load_4bit = args.load_4bit or vram < 24
     batch = args.batch or (8 if vram < 24 else 32)
     grad_accum = 4 if vram < 24 else 1
-    print(f"GPU VRAM ~{vram:.0f}GB -> 4bit={load_4bit} batch={batch} grad_accum={grad_accum}")
+    bf16_ok = torch.cuda.is_bf16_supported() if torch.cuda.is_available() else False
+    print(f"GPU VRAM ~{vram:.0f}GB -> 4bit={load_4bit} batch={batch} bf16={bf16_ok} (T4=fp16)")
     from datasets import Dataset
     from trl import SFTConfig, SFTTrainer
 
     model, tok = FastLanguageModel.from_pretrained(
         model_name=args.base,
         max_seq_length=1024,
-        dtype=torch.bfloat16,
+        dtype=None,   # Unsloth auto-selects fp16 (Turing/T4) or bf16 (Ampere+)
         load_in_4bit=load_4bit,
     )
     tok = getattr(tok, "tokenizer", tok)  # Qwen3.5 returns a multimodal processor
@@ -71,7 +72,8 @@ def main():
         logging_steps=20,
         save_steps=100,
         save_total_limit=3,
-        bf16=True,
+        bf16=bf16_ok,
+        fp16=not bf16_ok,
         max_length=1024,
         dataset_text_field="text",
         report_to=[],
