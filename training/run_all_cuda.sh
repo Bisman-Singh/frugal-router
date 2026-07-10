@@ -34,10 +34,10 @@ echo "== convert + quantize =="
 [ -d llama.cpp ] || git clone --depth 1 https://github.com/ggerganov/llama.cpp
 python llama.cpp/convert_hf_to_gguf.py ./tuned/merged --outfile tuned-f16.gguf || exit 1
 cmake -B llama.cpp/build llama.cpp >/dev/null 2>&1 && cmake --build llama.cpp/build -t llama-quantize -j >/dev/null 2>&1
-./llama.cpp/build/bin/llama-quantize tuned-f16.gguf tuned-2b-q4km.gguf Q4_K_M || exit 1
+./llama.cpp/build/bin/llama-quantize tuned-f16.gguf tuned-3b-q4km.gguf Q4_K_M || exit 1
 
 echo "== sized GGUF gate =="
 pip install -q llama-cpp-python 2>/dev/null || true
-python eval_gguf.py --gguf tuned-2b-q4km.gguf --n 300 --threads 2 || true
+python eval_gguf.py --gguf tuned-3b-q4km.gguf --n 300 --threads 2 || true
 
-echo "DONE. Download tuned-2b-q4km.gguf; paste the eval tables back."
+echo "DONE. Download tuned-3b-q4km.gguf; paste the eval tables back."
