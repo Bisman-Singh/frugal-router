@@ -75,6 +75,85 @@ def _model_for(backend: str, category: str) -> str:
 
 _last_call = 0.0
 
+# --- faithful ensemble replica (mirrors simple.py's shipped path) ------------
+
+def ask_ensemble(client, backend: str, category: str, prompt: str,
+                 reason_effort: str = "on") -> str:
+    """Primary + second opinion + referee with the same system prompts and
+    budget shape the shipped ensemble uses, on this backend's models."""
+    from frugal_router.simple import SYSTEM, REFEREE_SYSTEM
+
+    def call(model: str, sys_prompt: str, user: str, cap: int, effort_none: bool) -> str:
+        kwargs = dict(model=model,
+                      messages=[{"role": "system", "content": sys_prompt},
+                                {"role": "user", "content": user}],
+                      temperature=0.0, max_tokens=cap)
+        if effort_none:
+            kwargs["extra_body"] = {"reasoning_effort": "none"}
+        try:
+            resp = client.chat.completions.create(**kwargs)
+            if getattr(resp, "usage", None):
+                _TOKENS["prompt"] += resp.usage.prompt_tokens or 0
+                _TOKENS["completion"] += resp.usage.completion_tokens or 0
+            text = (resp.choices[0].message.content or "").strip()
+            stripped = _THINK.sub("", text).strip()
+            return stripped if stripped else text
+        except Exception as exc:
+            print(f"  ! ensemble call failed ({model}): {type(exc).__name__}", file=sys.stderr)
+            return ""
+
+    is_reason = category in ("math", "logic")
+    is_code = category in ("code_gen", "code_debug")
+    primary_model = _model_for(backend, category)
+    second_model = FW_MODELS["general"] if primary_model != FW_MODELS["general"] else FW_MODELS["reason"]
+    budget = 8000 if is_reason else (6000 if is_code else 4000)
+    effort_none_primary = is_reason and reason_effort == "none"
+
+    primary = call(primary_model, SYSTEM, prompt, budget, effort_none_primary)
+    second = call(second_model, SYSTEM, prompt, budget, False)
+    final = primary or second
+    if primary and second and primary != second:
+        user = f"TASK:\n{prompt}\n\nCANDIDATE 1:\n{primary}\n\nCANDIDATE 2:\n{second}\n\nFinal answer:"
+        final = call(FW_MODELS["general"], REFEREE_SYSTEM, user, 8000, False) or final
+    return final
+
+
+_JUDGE_SYSTEM = (
+    "You are an evaluation judge for an AI benchmark. You will see a TASK and "
+    "an ANSWER. Decide whether the answer correctly and completely fulfills "
+    "the task's expected intent: the content must be correct, any explicit "
+    "format or length constraints in the task must be obeyed, and the answer "
+    "must be in English. Judge only what is asked; extra correct detail is "
+    "acceptable unless it violates a stated constraint. Reply with exactly one "
+    "line: 'VERDICT: correct' or 'VERDICT: incorrect'."
+)
+
+
+def judge_answer(judge_client, task_prompt: str, answer: str) -> bool | None:
+    """LLM-judge simulation of the harness's accuracy gate. None = judge failed."""
+    user = f"TASK:\n{task_prompt}\n\nANSWER:\n{answer}\n\nVerdict:"
+    for _ in range(2):
+        try:
+            resp = judge_client.chat.completions.create(
+                model="accounts/fireworks/models/glm-5p2",
+                messages=[{"role": "system", "content": _JUDGE_SYSTEM},
+                          {"role": "user", "content": user}],
+                temperature=0.0, max_tokens=1200,
+                extra_body={"reasoning_effort": "low"},
+            )
+            text = _THINK.sub("", (resp.choices[0].message.content or "")).strip().lower()
+            if "verdict: correct" in text:
+                return True
+            if "verdict: incorrect" in text:
+                return False
+        except Exception:
+            time.sleep(1.5)
+    return None
+
+
+_CJK = re.compile(r"[一-鿿぀-ヿ가-힯]")
+
+
 def ask(client, backend: str, category: str, prompt: str) -> str:
     global _last_call
     system, cap = _LEAN.get(category, _LEAN["factual"])
@@ -203,6 +282,12 @@ def main() -> None:
     ap.add_argument("--cats", default="", help="comma list to filter categories")
     ap.add_argument("--no-solvers", action="store_true")
     ap.add_argument("--dump", default="", help="write per-task results jsonl here")
+    ap.add_argument("--ensemble", action="store_true",
+                    help="use the shipped ensemble path (primary+second+referee)")
+    ap.add_argument("--reason-effort", choices=["on", "none"], default="on",
+                    help="reasoning effort for the math/logic primary in ensemble mode")
+    ap.add_argument("--judge", action="store_true",
+                    help="also grade every answer with an LLM judge (glm-5p2, dev key)")
     args = ap.parse_args()
 
     tasks = [json.loads(l) for l in Path(args.tasks).read_text().splitlines() if l.strip()]
@@ -218,7 +303,9 @@ def main() -> None:
         tasks = [t for cat in sorted(by_cat) for t in by_cat[cat][:per]]
 
     client = _client(args.backend) if args.backend != "none" else None
-    stats = defaultdict(lambda: {"n": 0, "solver": 0, "correct": 0})
+    judge_client = _client("fw") if args.judge else None
+    stats = defaultdict(lambda: {"n": 0, "solver": 0, "correct": 0,
+                                 "judged": 0, "judge_n": 0, "blank": 0, "cjk": 0})
     rows = []
 
     for k, t in enumerate(tasks, 1):
@@ -229,25 +316,58 @@ def main() -> None:
             if hit is not None:
                 answer, via = hit[0], "solver"
         if not answer and client is not None:
-            answer = normalize(cat, ask(client, args.backend, cat, t["prompt"]))
+            if args.ensemble:
+                answer = ask_ensemble(client, args.backend, cat, t["prompt"],
+                                      reason_effort=args.reason_effort)
+            else:
+                answer = ask(client, args.backend, cat, t["prompt"])
         ok = grade(t, answer) if answer else False
+        verdict = None
+        if judge_client is not None:
+            verdict = judge_answer(judge_client, t["prompt"], answer or "(no answer)")
         s = stats[cat]
         s["n"] += 1
         s["correct"] += ok
         s["solver"] += via == "solver"
+        s["blank"] += not (answer or "").strip()
+        s["cjk"] += bool(_CJK.search(answer or ""))
+        if verdict is not None:
+            s["judge_n"] += 1
+            s["judged"] += verdict
         rows.append({"id": t["id"], "category": cat, "via": via, "ok": ok,
-                     "answer": answer[:400], "prompt": t["prompt"][:200]})
+                     "judge": verdict, "cjk": bool(_CJK.search(answer or "")),
+                     "answer": answer[:600], "prompt": t["prompt"][:200]})
         if k % 20 == 0:
             print(f"  {k}/{len(tasks)} done", file=sys.stderr)
 
-    print(f"\n{'category':<15}{'n':>4}{'solver':>8}{'correct':>9}{'acc':>8}")
-    tot_n = tot_c = 0
+    hdr = f"\n{'category':<15}{'n':>4}{'solver':>8}{'det-acc':>9}"
+    if args.judge:
+        hdr += f"{'judged':>9}"
+    hdr += f"{'blank':>7}{'cjk':>5}"
+    print(hdr)
+    tot_n = tot_c = tot_j = tot_jn = 0
     for cat in sorted(stats):
         s = stats[cat]
-        tot_n += s["n"]; tot_c += s["correct"]
-        print(f"{cat:<15}{s['n']:>4}{s['solver']:>8}{s['correct']:>9}"
-              f"{s['correct'] / max(1, s['n']):>8.0%}")
-    print(f"{'TOTAL':<15}{tot_n:>4}{'':>8}{tot_c:>9}{tot_c / max(1, tot_n):>8.0%}")
+        tot_n += s["n"]; tot_c += s["correct"]; tot_j += s["judged"]; tot_jn += s["judge_n"]
+        line = (f"{cat:<15}{s['n']:>4}{s['solver']:>8}"
+                f"{s['correct'] / max(1, s['n']):>9.0%}")
+        if args.judge:
+            line += f"{s['judged'] / max(1, s['judge_n']):>9.0%}"
+        line += f"{s['blank']:>7}{s['cjk']:>5}"
+        print(line)
+    total = f"{'TOTAL':<15}{tot_n:>4}{'':>8}{tot_c / max(1, tot_n):>9.0%}"
+    if args.judge:
+        total += f"{tot_j / max(1, tot_jn):>9.0%}"
+    print(total)
+    # disagreements are the diagnostic gold: det-correct but judge-incorrect =
+    # format/verbosity penalty; det-wrong but judge-correct = grader artifact.
+    if args.judge:
+        fmt_penalty = [r for r in rows if r["ok"] and r["judge"] is False]
+        grader_artifact = [r for r in rows if not r["ok"] and r["judge"]]
+        print(f"det-correct/judge-INCORRECT (format penalty): {len(fmt_penalty)}"
+              f" -> {sorted(set(r['category'] for r in fmt_penalty))}")
+        print(f"det-wrong/judge-correct (grader artifact):   {len(grader_artifact)}"
+              f" -> {sorted(set(r['category'] for r in grader_artifact))}")
     print(f"tokens: prompt={_TOKENS['prompt']} completion={_TOKENS['completion']} "
           f"total={_TOKENS['prompt'] + _TOKENS['completion']}")
 

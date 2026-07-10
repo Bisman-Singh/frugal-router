@@ -1,20 +1,27 @@
 # frugal-router
 
-A confidence-driven routing agent for the AMD Developer Hackathon Act II,
-Track 1 (Hybrid Token-Efficient Routing Agent). Organizers clarified during
-the event that every scored answer must come from a Fireworks call through
-FIREWORKS_BASE_URL; local inference is free but cannot be the answer source.
-So the local model is the intelligence, not the mouthpiece. It classifies,
-drafts, and measures its own confidence for free, and that confidence decides
-how cheap the mandatory Fireworks call gets: a trusted draft rides along and
-the remote model confirms it in a handful of tokens, while an untrusted task
-gets a full remote solve with reasoning. The original zero-token local mode
-survives behind `router.answer_source: local` in case the ruling moves again.
+Track 1 entry for the AMD Developer Hackathon Act II (Hybrid Token-Efficient
+Routing Agent).
+
+**What the submitted image actually runs** (`frugal simple`, the only scored
+path): deterministic prove-or-defer solvers first (exact answers at zero
+tokens), then one Fireworks call per task with a per-category contract and
+reasoning suppressed, validated against category acceptance checks, with
+escalation on validated failure only — a corrective re-ask, then a different
+model family, then (hard categories) the reasoning mode. Every request is
+recorded in an inference ledger next to the results. No local weights are
+included in the image; the local-model and confidence-router machinery in this
+repository is development/history, not the scored path.
+
+Rules notes (as clarified by organizers during the event): local inference and
+deterministic solvers are legal and count as zero tokens; the accuracy gate is
+80% (16 of the 19 fixed tasks); the LLM judge is not perfectly deterministic
+run to run.
 
 ## Scoring rule and strategy
 
 Track 1 scores in two stages. An LLM judge grades each answer against expected
-intent, and submissions below a hidden accuracy threshold are excluded. The
+intent, and submissions below the 80% accuracy gate are excluded. The
 survivors are ranked ascending by total tokens recorded by the judging proxy.
 That asymmetry drives every design choice here. Failing the gate is total loss,
 overspending tokens only costs rank, so answers are intent-complete rather than

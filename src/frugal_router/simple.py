@@ -1,54 +1,154 @@
-"""Minimal passthrough router (v7).
+"""The scored path: accuracy-first gate baseline.
 
-Everything the main agent does — classification, per-category answer contracts,
-answer extraction, normalization, format validation — is machinery built for
-token efficiency that can mangle a correct model answer. Below the accuracy
-gate that machinery is a liability, not an asset.
+This module is what the submitted image runs — one consolidated pipeline, no
+dead branches. Design rules, in order:
 
-This module does the opposite: for each task, one call to a strong Fireworks
-model with the task prompt sent verbatim and a generous token budget, and the
-model's response returned verbatim as the answer. No extraction, no reshaping.
-It is deliberately close to what the one submission that cleared the gate almost
-certainly does.
+1. Known-available models only in the critical path. The general workhorse and
+   the code specialist have answered every scored run; the Gemma tiers are
+   opportunistic last-resort fallbacks, never load-bearing (they are on-demand
+   deployments that can 404).
+2. Deterministic solvers first: prove-or-defer, exact by construction.
+3. One primary call per task with a category contract (terse instruction +
+   budget), reasoning suppressed.
+4. VALIDATE the answer against the category's acceptance checks. Never rewrite
+   an answer; on failure RE-ASK — first the same model with the requirement
+   spelled out, then a different model family, then (hard categories) the
+   reasoning mode. Escalation only on validated failure.
+5. Never exit non-zero; never blow the 10-minute wall; record every request in
+   an inference ledger written next to the results.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+# --------------------------------------------------------------- contracts --
+
+_BASE = "English only. Be concise; no preamble."
+
+# category -> (system instruction, max_tokens for the primary attempt)
+CONTRACTS: dict[str, tuple[str, int]] = {
+    "factual": (f"{_BASE} Answer accurately and completely in under 120 words.", 700),
+    "math": (f"{_BASE} Show brief steps, then end with 'Answer: <value>' on its own line.", 1500),
+    "sentiment": (f"{_BASE} State exactly one label - positive, negative, or neutral - then one short justification.", 300),
+    "summarization": (f"{_BASE} Output only the summary and obey any stated length or format constraint exactly.", 400),
+    "ner": (f"{_BASE} List each entity as 'label: value', one per line; labels: person, organization, location, date.", 500),
+    "logic": (f"{_BASE} Reason in brief numbered steps checking every constraint, then end with 'Answer: <value>' on its own line.", 1800),
+    "code_debug": (f"{_BASE} Name the bug in one sentence, then give the complete corrected code in one fenced block.", 2500),
+    "code_gen": (f"{_BASE} Output only the complete, correct, self-contained code in one fenced block.", 2500),
+}
+
+# Back-compat exports for the eval harness (same (instruction, cap) shape).
+_LEAN = CONTRACTS
 SYSTEM = (
     "You are a careful, knowledgeable assistant completing evaluation tasks. "
     "Answer each task correctly and completely, giving the full answer the task "
-    "asks for. For sentiment tasks, state the label and justify it. For code "
-    "tasks, provide complete, correct, runnable code. Respond in English."
+    "asks for. Respond in English."
+)
+REFEREE_SYSTEM = (
+    "You are a meticulous grader consolidating candidate answers to a task. "
+    "Output ONLY the single best final answer for the task, in English."
 )
 
-# Substring preferences for model choice, resolved against ALLOWED_MODELS.
-# Code -> the code specialist. Math/logic -> the reasoning model with reasoning
-# ENABLED and a big budget: below the accuracy gate tokens are irrelevant, and
-# multi-step word problems and constraint puzzles are exactly where a
-# non-reasoning model drops the 2-3 tasks that decide the gate.
-# Everything else -> the general Gemma model.
-_CODE_HINT = re.compile(r"(?i)\b(bug|debug|fix|function|code|python|program|def |class |implement|compile)\b|```")
-_REASON_HINT = re.compile(
-    r"(?i)\b(how (many|much|far|old|long)|calculate|compute|percent|%|total|remainder|"
-    r"average|per (hour|day|week|month)|profit|discount|split|ratio|"
-    r"puzzle|deduce|constraint|exactly one|who (owns|is|was|finished)|taller|older|younger|"
-    r"if all|must be true|either)\b|\d\s*[-+*/^]\s*\d"
-)
 _CODE_MODELS = ["kimi-k2p7-code", "code", "kimi"]
-_REASON_MODELS = ["minimax", "deepseek", "gpt-oss", "glm"]
-# v9: the 78.9% leader routes everything non-code to the reasoning model with
-# no output cap. Below the gate, tokens are irrelevant; truncation and weaker
-# general models are the only enemies. GENERAL_HINTS env can flip this back to
-# gemma-first for A/B without a rebuild.
 _GENERAL_MODELS = [h.strip() for h in os.environ.get(
     "GENERAL_HINTS", "minimax,gemma-4-31b-it,gemma").split(",") if h.strip()]
+_OPPORTUNISTIC = ["gemma-4-31b-it", "gemma"]  # never load-bearing
+
+_FENCE = re.compile(r"```[a-zA-Z0-9]*\n(.*?)```", re.DOTALL)
+_THINK = re.compile(r"(?s)<(?:think|thought)>.*?(?:</(?:think|thought)>|\Z)\s*")
+_UNCLOSED_THINK = re.compile(r"(?i)<(?:think|thought)>(?!.*</(?:think|thought)>)", re.DOTALL)
+_TRAILING_CLOSE = re.compile(r"(?is)^.*?</(?:think|thought)>\s*")
+
+# ----------------------------------------------------------------- ledger ---
+
+LEDGER: list[dict] = []
+_ledger_lock = threading.Lock()
+
+
+def _record(task_id: str, model: str, status: str, attempt: int, usage) -> None:
+    entry = {"task_id": task_id, "model": model, "status": status, "attempt": attempt,
+             "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+             "completion_tokens": getattr(usage, "completion_tokens", 0) or 0}
+    with _ledger_lock:
+        LEDGER.append(entry)
+
+# -------------------------------------------------------------- validation --
+
+
+def validate(category: str, prompt: str, answer: str) -> str | None:
+    """Acceptance check. Returns None when the answer is acceptable, else a
+    short requirement string used to re-ask. Never mutates the answer."""
+    a = (answer or "").strip()
+    if not a:
+        return "a non-empty answer is required"
+    low = a.lower()
+
+    if category == "math":
+        if not re.search(r"-?\d", a):
+            return "end with 'Answer: <numeric value>' on its own line"
+
+    elif category == "sentiment":
+        labels = {l for l in ("positive", "negative", "neutral")
+                  if re.search(rf"\b{l}\b", low)}
+        if len(labels) != 1:
+            return ("state exactly one sentiment label - positive, negative, or "
+                    "neutral - followed by a brief justification")
+
+    elif category == "ner":
+        hits = sum(1 for l in ("person", "organization", "location", "date") if l in low)
+        if hits < 2:
+            return ("list each entity as 'label: value' on its own line using the "
+                    "labels person, organization, location, date")
+
+    elif category == "summarization":
+        m = re.search(r"(?i)\bin\s+(one|a single|two|three|\d+)\s+sentences?\b", prompt)
+        if m:
+            word = m.group(1).lower()
+            want = {"one": 1, "a single": 1, "two": 2, "three": 3}.get(word)
+            want = want if want is not None else int(word)
+            sentences = [s for s in re.split(r"[.!?]+(?:\s+|$)", a) if s.strip()]
+            if len(sentences) > want:
+                return f"the summary must be at most {want} sentence(s)"
+        m = re.search(r"(?i)\bin\s+(\d+)\s+words?\b", prompt)
+        if m and len(a.split()) > int(m.group(1)) * 1.5:
+            return f"the summary must be about {m.group(1)} words"
+
+    elif category in ("code_gen", "code_debug"):
+        block = _FENCE.search(a)
+        code = block.group(1) if block else a
+        is_python = bool(re.search(r"(?i)\bpython\b", prompt)) or bool(
+            re.search(r"^\s*(def |import |from |class )", code, re.MULTILINE))
+        if block is None and category == "code_gen":
+            return "provide the code in one fenced code block"
+        if is_python:
+            try:
+                ast.parse(code)
+            except SyntaxError:
+                return "provide complete, syntactically valid code in one fenced block"
+
+    elif category == "logic":
+        if re.search(r"(?i)\b(yes or no|true or false)\b", prompt) and not \
+                re.search(r"\b(yes|no|true|false)\b", low):
+            return "state the final yes/no answer explicitly"
+
+    return None
+
+# ------------------------------------------------------------------ client --
+
+
+def _client(key, base):
+    from openai import OpenAI
+
+    return OpenAI(api_key=key, base_url=base,
+                  timeout=float(os.environ.get("TIMEOUT_S", "45")), max_retries=1)
 
 
 def _pick(allowed, hints):
@@ -56,329 +156,191 @@ def _pick(allowed, hints):
         for m in allowed:
             if h.lower() in m.lower():
                 return m
-    return allowed[0] if allowed else ""
-
-
-def run_simple(input_path="/input/tasks.json", output_path="/output/results.json",
-               max_workers=None, per_task_max_tokens=None):
-    # Tunable via environment so image variants need no code change.
-    max_workers = int(os.environ.get("WORKERS", max_workers or 8))
-    per_task_max_tokens = int(os.environ.get("RETRY_TOKENS", per_task_max_tokens or 1200))
-    deadline_s = float(os.environ.get("DEADLINE_S", "510"))  # rule: 10-min wall
-    started = time.monotonic()
-    answers: dict[str, str] = {}
-    tasks = _read(input_path, answers)
-    _write(output_path, answers)
-    if not tasks:
-        return 0
-
-    # Deterministic solvers need no API: run them before the credential check
-    # so every provable task is answered even if the environment is broken.
-    if os.environ.get("SOLVERS", "1") != "0":
-        from .solvers import solve_any as _solve_any
-
-        for tid, prompt in tasks:
-            hit = _solve_any(prompt)
-            if hit is not None:
-                answers[tid] = hit[0]
-        if any(answers.values()):
-            _write(output_path, answers)
-        tasks = [(tid, p) for tid, p in tasks if not answers.get(tid)]
-        if not tasks:
-            _write(output_path, answers)
-            return 0
-
-    key = os.environ.get("FIREWORKS_API_KEY")
-    base = os.environ.get("FIREWORKS_BASE_URL") or "https://api.fireworks.ai/inference/v1"
-    allowed = [m.strip() for m in os.environ.get("ALLOWED_MODELS", "").split(",") if m.strip()]
-    if not key or not allowed:
-        print("missing FIREWORKS_API_KEY or ALLOWED_MODELS", file=sys.stderr)
-        _write(output_path, answers)
-        return 0
-
-    from .backends.fireworks import FireworksBackend, normalize_base_url  # noqa
-
-    client = _client(key, normalize_base_url(base))
-    gen_model = _pick(allowed, _GENERAL_MODELS)
-    code_model = _pick(allowed, _CODE_MODELS)
-    reason_model = _pick(allowed, _REASON_MODELS)
-
-    def route(prompt: str) -> tuple[str, int]:
-        if _CODE_HINT.search(prompt):
-            return code_model, int(os.environ.get("BUDGET_CODE", "6000"))
-        if _REASON_HINT.search(prompt):
-            # Reasoning model, reasoning left ON, room for thought + answer.
-            # Board evidence: capping this budget truncates the reasoning and
-            # blanks exactly the hard tasks; the request-time rule is not
-            # enforced at a level that punishes the longer generation.
-            return reason_model, int(os.environ.get("BUDGET_REASON", "8000"))
-        return gen_model, int(os.environ.get("BUDGET_GENERAL", "4000"))
-
-    # LEAN=1: token-war mode. Zero-token classification + deterministic solvers
-    # answer provable math/logic free; every other task is ONE call with a terse
-    # category prompt and a tuned cap. Used only once the accuracy gate is
-    # passed; default mode stays accuracy-first ensemble.
-    lean = os.environ.get("LEAN", "0") == "1"
-    # Second-opinion generator and referee, from different model families.
-    # ENSEMBLE=0 disables (single-model mode identical to v9).
-    ensemble = (os.environ.get("ENSEMBLE", "1") != "0") and not lean
-    alt_model = _pick(allowed, ["gemma-4-31b-it", "gemma", "deepseek", "glm"])
-    referee_model = _pick(allowed, ["gemma-4-26b-a4b", "gemma", "minimax"])
-
-    def solve(task):
-        from .classify import classify as _classify
-        from .normalize import normalize
-        from .solvers import solve_any
-        from .tasks import Task
-
-        tid, prompt = task
-        if lean:
-            answers[tid] = _solve_lean(client, prompt, gen_model, code_model, reason_model)
-            _write(output_path, answers)
-            return
-
-        # Deterministic solvers run first: prove-or-defer means a hit is exact
-        # by construction (zero tokens, no format risk); anything unproven
-        # falls through to the ensemble. SOLVERS=0 disables.
-        if os.environ.get("SOLVERS", "1") != "0":
-            hit = solve_any(prompt)
-            if hit is not None:
-                answers[tid] = hit[0]
-                _write(output_path, answers)
-                return
-
-        category = _classify(Task(id=tid, input=prompt))
-        model, budget = route(prompt)
-        primary = ""
-        try:
-            # Primary runs with reasoning suppressed: the gate-clearing configs
-            # all do, and a clean direct answer cannot be polluted by monologue.
-            primary = _call(client, model, prompt, budget, effort="none")
-        except Exception as exc:
-            print(f"task {tid} failed on {model}: {type(exc).__name__}", file=sys.stderr)
-
-        second = ""
-        if ensemble:
-            second_model = alt_model if alt_model != model else code_model
-            try:
-                second = _call(client, second_model, prompt, budget)
-            except Exception as exc:
-                print(f"task {tid} second opinion failed: {type(exc).__name__}", file=sys.stderr)
-
-        # Self-consistency on the hard reasoning categories: one more
-        # independent sample from the reasoning model, this one with reasoning
-        # LEFT ON — it thinks differently than the suppressed primary, so the
-        # referee sees genuinely diverse candidates. SELF_CONSISTENCY=0 disables.
-        third = ""
-        if ensemble and model == reason_model and os.environ.get("SELF_CONSISTENCY", "1") != "0":
-            try:
-                third = _call(client, model, prompt, budget, temperature=0.7)
-            except Exception as exc:
-                print(f"task {tid} third sample failed: {type(exc).__name__}", file=sys.stderr)
-
-        candidates = [c for c in (primary, second, third) if c.strip()]
-        final = candidates[0] if candidates else ""
-        if ensemble and len(set(candidates)) > 1:
-            try:
-                final = _referee(client, referee_model, prompt, *candidates) or final
-            except Exception as exc:
-                print(f"task {tid} referee failed: {type(exc).__name__}", file=sys.stderr)
-
-        if not final.strip():
-            # a truncated/empty reply is a guaranteed zero; retry the other
-            # families before giving up (a lone timeout must not cost the task)
-            for fb_model in (alt_model, gen_model):
-                try:
-                    final = _call(client, fb_model, prompt, per_task_max_tokens)
-                except Exception:
-                    final = ""
-                if final.strip():
-                    break
-
-        # Answer normalization is opt-in only: scored evidence showed shape
-        # rewriting (an appended Answer line built from the last number, code
-        # reduced to its first fence) flips correct answers to wrong far more
-        # often than it repairs mis-shaped ones. NORMALIZE=1 re-enables.
-        if os.environ.get("NORMALIZE", "0") == "1":
-            final = normalize(category, final)
-        answers[tid] = final
-        _write(output_path, answers)
-
-    # Watchdog: whatever wedges (hung socket, stuck executor), a valid results
-    # file exists and the process exits 0 before the 10-minute wall.
-    def _watchdog():
-        time.sleep(max(5.0, started + deadline_s - time.monotonic()))
-        _write(output_path, answers)
-        print("watchdog: flushed results before the wall", file=sys.stderr)
-        os._exit(0)
-
-    __import__("threading").Thread(target=_watchdog, daemon=True).start()
-
-    try:
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            list(pool.map(solve, tasks))
-    except Exception as exc:  # a worker crash must never cost the exit code
-        print(f"pool error: {type(exc).__name__}: {exc}", file=sys.stderr)
-
-    _write(output_path, answers)
-    print(json.dumps({"tasks": len(tasks), "answered": sum(1 for v in answers.values() if v),
-                      "elapsed_s": round(time.monotonic() - started, 1)}), file=sys.stderr)
-    return 0
-
-
-def _client(key, base):
-    from openai import OpenAI
-
-    return OpenAI(api_key=key, base_url=base,
-                  timeout=float(os.environ.get("TIMEOUT_S", "55")), max_retries=1)
-
-
-_THINK = re.compile(r"(?s)<(?:think|thought)>.*?(?:</(?:think|thought)>|\Z)\s*")
-
-# Lean-mode category prompts: terse (input tokens bill) but intent-complete.
-_LEAN = {
-    "factual":       ("English only. Answer accurately and completely; under 120 words.", 300),
-    "math":          ("English only. Brief steps, then 'Answer: <value>' on its own line.", 400),
-    "sentiment":     ("English only. Label the sentiment positive, negative, or neutral, then one short justification.", 120),
-    "summarization": ("English only. Output only the summary; obey any stated length or format constraint.", 220),
-    "ner":           ("English only. List each entity as 'label: value', one per line; labels: person, organization, location, date.", 260),
-    "logic":         ("English only. Deduce in brief numbered steps checking every constraint, then 'Answer: <value>' on its own line.", 420),
-    "code_debug":    ("English only. Name the bug in one sentence, then the corrected code in one fenced block.", 560),
-    "code_gen":      ("English only. Output only the code in one fenced block, correct and self-contained.", 560),
-}
-
-
-def _solve_lean(client, prompt, gen_model, code_model, reason_model):
-    from .classify import classify as _classify
-    from .solvers import solve_any
-    from .tasks import Task
-
-    if os.environ.get("SOLVERS", "1") != "0":
-        hit = solve_any(prompt)
-        if hit is not None:
-            return hit[0]  # proven-correct deterministic answer: zero tokens
-    cat = _classify(Task(id="x", input=prompt))
-    system, cap = _LEAN.get(cat, _LEAN["factual"])
-    # Passer-validated tiering: the strong general model handles math/logic at
-    # reasoning-effort none (a reasoning model with reasoning suppressed is
-    # crippled; a strong non-reasoning model is not). Light model for the three
-    # classification-style categories, code specialist for code.
-    cheap_model = _pick(os.environ.get("ALLOWED_MODELS", "").split(","), ["a4b"]) or gen_model
-    if cat in ("code_debug", "code_gen"):
-        model = code_model
-    elif cat in ("sentiment", "summarization", "ner"):
-        model = cheap_model
-    else:
-        model = gen_model
-    out = ""
-    try:
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": prompt}],
-            temperature=0.0, max_tokens=cap,
-            extra_body={"reasoning_effort": "none"},
-        )
-        out = _THINK.sub("", (resp.choices[0].message.content or "").strip()).strip()
-    except Exception:
-        out = ""
-    if out:
-        return out
-    # Blank or errored (model not deployed, effort param rejected, truncation,
-    # transient): a blank answer is a guaranteed zero. Retry on the strong
-    # general model with reasoning suppressed first — if that model reasons and
-    # the suppression is dropped, a small cap fills with hidden thinking and
-    # returns blank — then once more plain with a budget big enough to think in.
-    for extra, fb_cap in (({"reasoning_effort": "none"}, max(cap, 800)), (None, 1600)):
-        try:
-            kwargs = dict(model=gen_model,
-                          messages=[{"role": "system", "content": system},
-                                    {"role": "user", "content": prompt}],
-                          temperature=0.0, max_tokens=fb_cap)
-            if extra:
-                kwargs["extra_body"] = extra
-            resp = client.chat.completions.create(**kwargs)
-            out = _THINK.sub("", (resp.choices[0].message.content or "").strip()).strip()
-            if out:
-                return out
-        except Exception:
-            continue
     return ""
 
 
-REFEREE_SYSTEM = (
-    "You are a meticulous grader consolidating two candidate answers to a task. "
-    "Check each against the task's explicit requirements (correctness, "
-    "completeness, any format or length constraints). Output ONLY the single "
-    "best final answer for the task: if one candidate is fully correct and "
-    "complete, output it verbatim; otherwise output a corrected answer that "
-    "fixes the flaws. Never output commentary, labels, or comparisons - only "
-    "the final answer itself, in English."
-)
-
-
-def _referee(client, model, prompt, *candidates):
-    blocks = "\n\n".join(
-        f"CANDIDATE {i}:\n{c}" for i, c in enumerate(candidates, 1)
-    )
-    user = f"TASK:\n{prompt}\n\n{blocks}\n\nFinal answer:"
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": REFEREE_SYSTEM}, {"role": "user", "content": user}],
-        temperature=0.0,
-        max_tokens=8000,
-    )
-    text = (resp.choices[0].message.content or "").strip()
-    return _THINK.sub("", text).strip()
-
-
-_UNCLOSED_THINK = re.compile(r"(?i)<(?:think|thought)>(?!.*</(?:think|thought)>)", re.DOTALL)
-_TRAILING_CLOSE = re.compile(r"(?is)^.*?</(?:think|thought)>\s*")
-
-
-def _call(client, model, prompt, max_tokens, temperature=0.0, effort=None):
-    """One completion. Reasoning is suppressed when `effort` is set: hidden
-    monologue glued into content pollutes the judged answer even when the real
-    answer inside it is correct, and on hard prompts it can eat the entire
-    budget before an answer is written."""
-    kwargs = dict(
-        model=model,
-        messages=[{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}],
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+def _call(client, task_id, model, system, prompt, max_tokens, attempt,
+          temperature=0.0, effort="none"):
+    """One completion with reasoning suppressed by default. Returns cleaned
+    text ('' for an all-thought reply). Raises on transport errors so the
+    caller can walk its model chain."""
+    kwargs = dict(model=model,
+                  messages=[{"role": "system", "content": system},
+                            {"role": "user", "content": prompt}],
+                  temperature=temperature, max_tokens=max_tokens)
     if effort:
         kwargs["extra_body"] = {"reasoning_effort": effort}
     try:
         resp = client.chat.completions.create(**kwargs)
     except Exception as exc:
         msg = str(exc).lower()
-        # Models that reject the reasoning knob get one plain retry.
-        if effort and any(s in msg for s in
-                          ("reasoning_effort", "unsupported", "unknown parameter", "extra")):
+        if effort and any(s in msg for s in ("reasoning_effort", "unsupported",
+                                             "unknown parameter", "extra")):
             kwargs.pop("extra_body", None)
             resp = client.chat.completions.create(**kwargs)
-        elif "404" in msg or "not found" in msg:
-            # The id form the proxy expects may differ from ALLOWED_MODELS:
-            # retry once with the alternate bare/full-path form.
-            alt = (model.rsplit("/", 1)[-1] if "/" in model
-                   else f"accounts/fireworks/models/{model}")
-            kwargs["model"] = alt
-            resp = client.chat.completions.create(**kwargs)
         else:
+            _record(task_id, model, f"error:{type(exc).__name__}", attempt, None)
             raise
+    _record(task_id, model, "ok", attempt, getattr(resp, "usage", None))
     text = (resp.choices[0].message.content or "").strip()
     if _UNCLOSED_THINK.search(text):
-        # Cut off mid-reasoning: there is no answer in this response at all.
-        # Retry once with reasoning suppressed so the budget goes to the answer.
-        if not effort:
-            return _call(client, model, prompt, max_tokens, temperature, effort="none")
-        return ""
-    stripped = _THINK.sub("", text).strip()
-    # A stray closing tag with no opening tag: everything before it is thought.
-    if re.search(r"(?i)</(?:think|thought)>", stripped):
-        stripped = _TRAILING_CLOSE.sub("", stripped).strip()
-    return stripped
+        return ""  # cut off mid-reasoning: no answer in this response at all
+    text = _THINK.sub("", text).strip()
+    if re.search(r"(?i)</(?:think|thought)>", text):
+        text = _TRAILING_CLOSE.sub("", text).strip()
+    return text
+
+# ------------------------------------------------------------------- solve --
+
+
+def _solve_task(client, task_id, prompt, category, chain):
+    """Contract call -> validate -> corrective re-ask on the same model ->
+    cross-model -> (hard categories) reasoning mode. Returns the best answer
+    seen; escalation happens only on validated failure."""
+    system, budget = CONTRACTS.get(category, CONTRACTS["factual"])
+    best = ""
+
+    attempts = [(chain[0], "none", 0.0, budget),
+                (chain[0], "none", 0.0, budget)]      # corrective re-ask
+    for extra in chain[1:]:
+        attempts.append((extra, "none", 0.0, budget))  # different model family
+    if category in ("math", "logic", "code_debug"):
+        # A genuinely different mode, not a reroll: reasoning ON, larger budget.
+        attempts.append((chain[0], None, 0.3, max(budget * 3, 4000)))
+
+    requirement = None
+    for i, (model, effort, temp, cap) in enumerate(attempts):
+        if i == 1 and requirement is None:
+            continue  # first answer validated: the re-ask slot is skipped
+        ask = prompt if not requirement else f"{prompt}\n\nRequirement: {requirement}."
+        try:
+            answer = _call(client, task_id, model, system, ask, cap, i,
+                           temperature=temp, effort=effort)
+        except Exception:
+            continue  # transport failure: walk the chain
+        problem = validate(category, prompt, answer)
+        if answer:
+            best = answer
+        if problem is None:
+            return answer
+        requirement = problem
+    return best
+
+# -------------------------------------------------------------------- main --
+
+
+def run_simple(input_path="/input/tasks.json", output_path="/output/results.json",
+               max_workers=None, per_task_max_tokens=None):
+    max_workers = int(os.environ.get("WORKERS", max_workers or 6))
+    deadline_s = float(os.environ.get("DEADLINE_S", "510"))
+    started = time.monotonic()
+
+    answers: dict[str, str] = {}
+    tasks = _read(input_path, answers)
+    _write(output_path, answers)
+    if not tasks:
+        return 0
+
+    total = len(tasks)
+    solver_hits = 0
+
+    # Deterministic solvers: exact answers at zero tokens, no API needed.
+    if os.environ.get("SOLVERS", "1") != "0":
+        from .solvers import solve_any
+
+        for tid, prompt in tasks:
+            try:
+                hit = solve_any(prompt)
+            except Exception:
+                hit = None
+            if hit is not None:
+                answers[tid] = hit[0]
+                solver_hits += 1
+        if solver_hits:
+            _write(output_path, answers)
+        tasks = [(tid, p) for tid, p in tasks if not answers.get(tid)]
+
+    key = os.environ.get("FIREWORKS_API_KEY")
+    base = os.environ.get("FIREWORKS_BASE_URL") or "https://api.fireworks.ai/inference/v1"
+    allowed = [m.strip() for m in os.environ.get("ALLOWED_MODELS", "").split(",") if m.strip()]
+
+    if tasks and key and allowed:
+        from .backends.fireworks import normalize_base_url  # noqa
+        from .classify import classify as _classify
+        from .tasks import Task
+
+        client = _client(key, normalize_base_url(base))
+        gen_model = _pick(allowed, _GENERAL_MODELS) or allowed[0]
+        code_model = _pick(allowed, _CODE_MODELS) or gen_model
+        extra_model = _pick(allowed, _OPPORTUNISTIC)
+
+        def chain_for(category: str) -> list[str]:
+            # Known-available models carry the chain; the opportunistic tier
+            # is a last resort only. No model appears twice.
+            if category in ("code_gen", "code_debug"):
+                chain = [code_model, gen_model]
+            else:
+                chain = [gen_model, code_model]
+            if extra_model and extra_model not in chain:
+                chain.append(extra_model)
+            return [m for m in chain if m]
+
+        def work(task):
+            tid, prompt = task
+            try:
+                category = _classify(Task(id=tid, input=prompt))
+            except Exception:
+                category = "factual"
+            try:
+                answers[tid] = _solve_task(client, tid, prompt, category,
+                                           chain_for(category))
+            except Exception as exc:
+                print(f"task {tid} unhandled: {type(exc).__name__}: {exc}", file=sys.stderr)
+            _write(output_path, answers)
+
+        # Watchdog: results are flushed and the process exits 0 before the
+        # wall no matter what wedges. Unanswered ids are logged loudly.
+        def _watchdog():
+            time.sleep(max(5.0, started + deadline_s - time.monotonic()))
+            empty = [t for t, a in answers.items() if not a.strip()]
+            if empty:
+                print(f"watchdog: {len(empty)} unanswered at the wall: {empty}",
+                      file=sys.stderr)
+            _write(output_path, answers)
+            _write_ledger(output_path, total, solver_hits, started)
+            os._exit(0)
+
+        threading.Thread(target=_watchdog, daemon=True).start()
+
+        try:
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                list(pool.map(work, tasks))
+        except Exception as exc:
+            print(f"pool error: {type(exc).__name__}: {exc}", file=sys.stderr)
+    elif tasks:
+        print("missing FIREWORKS_API_KEY or ALLOWED_MODELS", file=sys.stderr)
+
+    _write(output_path, answers)
+    _write_ledger(output_path, total, solver_hits, started)
+    return 0
+
+
+def _write_ledger(output_path, total, solver_hits, started) -> None:
+    summary = {
+        "tasks": total,
+        "solver_answered": solver_hits,
+        "model_calls": len(LEDGER),
+        "prompt_tokens": sum(e["prompt_tokens"] for e in LEDGER),
+        "completion_tokens": sum(e["completion_tokens"] for e in LEDGER),
+        "elapsed_s": round(time.monotonic() - started, 1),
+    }
+    print(json.dumps(summary), file=sys.stderr)
+    try:
+        Path(output_path).with_name("inference_log.json").write_text(
+            json.dumps({"summary": summary, "calls": LEDGER}, ensure_ascii=False),
+            encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _read(input_path, answers):
@@ -387,29 +349,33 @@ def _read(input_path, answers):
     except Exception as exc:
         print(f"cannot read {input_path}: {type(exc).__name__}", file=sys.stderr)
         return []
-    tasks = []
+    tasks, seen = [], set()
     for i, item in enumerate(raw if isinstance(raw, list) else []):
         if not isinstance(item, dict):
+            print(f"skipping malformed task record #{i}", file=sys.stderr)
             continue
         tid = str(item.get("task_id", f"task-{i}"))
+        if tid in seen:
+            print(f"duplicate task_id {tid!r}: keeping the first occurrence",
+                  file=sys.stderr)
+            continue
+        seen.add(tid)
         answers[tid] = ""
         tasks.append((tid, str(item.get("prompt", ""))))
     return tasks
 
 
-_write_lock = __import__("threading").Lock()
+_write_lock = threading.Lock()
 
 
 def _write(output_path, answers):
-    # Thread-safe atomic write: unique temp per writer, serialized replace.
-    # Concurrent workers sharing one temp name can collide and crash the run.
     try:
         path = Path(output_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         results = [{"task_id": k, "answer": v} for k, v in answers.items()]
         with _write_lock:
-            tmp = path.with_name(f".{path.name}.{os.getpid()}.{__import__('threading').get_ident()}.tmp")
+            tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
             tmp.write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
             os.replace(tmp, path)
     except Exception as exc:
-        print(f"write failed (will retry on next flush): {exc}", file=__import__("sys").stderr)
+        print(f"write failed (will retry on next flush): {exc}", file=sys.stderr)
