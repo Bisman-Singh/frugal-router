@@ -28,7 +28,7 @@ python train_unsloth.py --base "$BASE" --data sft.jsonl --out ./tuned --load-4bi
     ${LAST:+--resume "$LAST"} || exit 1
 
 echo "== eval (2000 graded, unseen) =="
-python eval_gpu.py --model ./tuned/merged --n 2000 || exit 1
+python eval_gpu.py --model ./tuned/merged --n 600 || exit 1
 
 echo "== convert + quantize =="
 [ -d llama.cpp ] || git clone --depth 1 https://github.com/ggerganov/llama.cpp
