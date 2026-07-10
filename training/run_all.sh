@@ -16,7 +16,6 @@ pip install -q "transformers>=4.51" peft trl datasets accelerate sentencepiece g
 echo "== phase 1: pick the strongest 2B-class base that loads =="
 BASE=$(python - <<'PY'
 candidates = [
-    "Qwen/Qwen3.5-2B-Instruct",
     "Qwen/Qwen3.5-2B",
     "Qwen/Qwen3-1.7B",
 ]
@@ -63,6 +62,10 @@ echo "== phase 5: convert + quantize =="
 python llama.cpp/convert_hf_to_gguf.py ./tuned/merged --outfile tuned-final-f16.gguf || exit 1
 cmake -B llama.cpp/build llama.cpp >/dev/null && cmake --build llama.cpp/build -t llama-quantize -j >/dev/null
 ./llama.cpp/build/bin/llama-quantize tuned-final-f16.gguf tuned-final-q4km.gguf Q4_K_M || exit 1
+
+echo "== phase 6: sized post-quant gate (GGUF vs bf16, >=300 tasks) =="
+pip install -q llama-cpp-python 2>/dev/null || true
+python eval_gguf.py --gguf tuned-final-q4km.gguf --n 300 --threads 8 || exit 1
 
 echo ""
 echo "================================================================"
