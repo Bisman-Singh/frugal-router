@@ -13,7 +13,9 @@ for c in ["unsloth/Qwen2.5-3B-Instruct","unsloth/Llama-3.2-3B-Instruct","unsloth
 PY
 )
 echo "base: $BASE"
-[ -f sft.jsonl ] || python build_dataset_big.py --out sft.jsonl --target 80000 || exit 1
+rm -f sft.jsonl   # ALWAYS rebuild the big set; never trust a committed/cached sft.jsonl
+python build_dataset_big.py --out sft.jsonl --target 80000 || exit 1
+echo "dataset lines: $(wc -l < sft.jsonl)"
 LAST=$(ls -d tuned/checkpoint-* 2>/dev/null | sort -V | tail -1 || true)
 python train_unsloth.py --base "$BASE" --data sft.jsonl --out ./tuned --load-4bit --epochs 2 \
     ${LAST:+--resume "$LAST"} || exit 1
