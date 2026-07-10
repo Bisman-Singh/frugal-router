@@ -70,7 +70,7 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
 
     # Deterministic solvers need no API: run them before the credential check
     # so every provable task is answered even if the environment is broken.
-    if os.environ.get("SOLVERS", "0") == "1":
+    if os.environ.get("SOLVERS", "1") != "0":
         from .solvers import solve_any as _solve_any
 
         for tid, prompt in tasks:
@@ -136,7 +136,7 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
         # Deterministic solvers run first: prove-or-defer means a hit is exact
         # by construction (zero tokens, no format risk); anything unproven
         # falls through to the ensemble. SOLVERS=0 disables.
-        if os.environ.get("SOLVERS", "0") == "1":
+        if os.environ.get("SOLVERS", "1") != "0":
             hit = solve_any(prompt)
             if hit is not None:
                 answers[tid] = hit[0]
@@ -235,7 +235,7 @@ def _solve_lean(client, prompt, gen_model, code_model, reason_model):
     from .solvers import solve_any
     from .tasks import Task
 
-    if os.environ.get("SOLVERS", "0") == "1":
+    if os.environ.get("SOLVERS", "1") != "0":
         hit = solve_any(prompt)
         if hit is not None:
             return hit[0]  # proven-correct deterministic answer: zero tokens
