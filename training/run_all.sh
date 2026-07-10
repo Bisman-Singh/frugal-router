@@ -13,6 +13,7 @@ set -uo pipefail
 echo "== phase 0: deps (don't clobber a working preinstalled ROCm stack) =="
 python -c "import peft,trl,datasets,accelerate" 2>/dev/null || \
   pip install -q peft trl datasets accelerate sentencepiece gguf huggingface_hub || exit 1
+command -v cmake >/dev/null 2>&1 || pip install -q cmake ninja   # llama.cpp quantize needs cmake
 [ -n "${HF_TOKEN:-}" ] && python -c "import os;from huggingface_hub import login;login(token=os.environ['HF_TOKEN'])" 2>/dev/null && echo "HF authenticated"
 
 echo "== phase 1: pick the strongest 3B base that loads (Q4 fits the 4GB judge) =="
@@ -34,7 +35,7 @@ echo "dataset lines: $(wc -l < sft.jsonl)"
 echo "== phase 3: full bf16 LoRA on the big AMD GPU (resume-safe) =="
 LAST_CKPT=$(ls -d tuned/checkpoint-* 2>/dev/null | sort -V | tail -1 || true)
 python train_lora_amd.py --base "$BASE" --data sft.jsonl --out ./tuned \
-    --epochs 2 --batch 16 ${LAST_CKPT:+--resume "$LAST_CKPT"} || exit 1
+    --epochs 2 --batch 32 ${LAST_CKPT:+--resume "$LAST_CKPT"} || exit 1   # 192GB MI300X: bigger batch = faster
 
 echo "== phase 4: GPU eval over ~800 unseen graded tasks =="
 python eval_gpu.py --model ./tuned/merged --n 800 || exit 1
