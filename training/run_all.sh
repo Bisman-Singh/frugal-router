@@ -1,74 +1,54 @@
 #!/usr/bin/env bash
-# End-to-end trainer for the AMD notebook. ONE command inside tmux:
+# FLAGSHIP AMD-notebook trainer (ROCm, big VRAM -> full bf16 LoRA, NOT 4-bit).
+# ONE command inside tmux (survives disconnects):
 #
 #   tmux new -s train
-#   bash run_all.sh 2>&1 | tee run_all.log
+#   HF_TOKEN=... bash run_all.sh 2>&1 | tee run_all.log
 #
-# Phases: deps -> pick base -> dataset -> LoRA train (ckpts) -> merge ->
-# GPU eval over ~2000 graded tasks -> convert -> quantize Q4_K_M.
-# Artifacts: tuned-final-q4km.gguf (download this) + eval_report.json (paste
-# the printed report back). Total ~3.5-6h; every phase resumes if rerun.
+# Phases: deps -> pick 3B base -> BIG dataset (~50k+) -> full bf16 LoRA (ckpts)
+# -> merge -> GPU eval -> convert -> quantize Q4_K_M. Every phase resumes on rerun.
+# Artifact: tuned-3b-amd-q4km.gguf (download this) + the printed eval table.
 set -uo pipefail
 
-echo "== phase 0: deps =="
-pip install -q "transformers>=4.51" peft trl datasets accelerate sentencepiece gguf || exit 1
+echo "== phase 0: deps (don't clobber a working preinstalled ROCm stack) =="
+python -c "import peft,trl,datasets,accelerate" 2>/dev/null || \
+  pip install -q peft trl datasets accelerate sentencepiece gguf huggingface_hub || exit 1
+[ -n "${HF_TOKEN:-}" ] && python -c "import os;from huggingface_hub import login;login(token=os.environ['HF_TOKEN'])" 2>/dev/null && echo "HF authenticated"
 
-echo "== phase 1: pick the strongest 2B-class base that loads =="
+echo "== phase 1: pick the strongest 3B base that loads (Q4 fits the 4GB judge) =="
 BASE=$(python - <<'PY'
-candidates = [
-    "Qwen/Qwen3.5-2B",
-    "Qwen/Qwen3-1.7B",
-]
 from transformers import AutoConfig
-for c in candidates:
-    try:
-        AutoConfig.from_pretrained(c)
-        print(c)
-        break
-    except Exception:
-        continue
+for c in ["Qwen/Qwen2.5-3B-Instruct","unsloth/Qwen2.5-3B-Instruct","Qwen/Qwen2.5-1.5B-Instruct"]:
+    try: AutoConfig.from_pretrained(c); print(c); break
+    except Exception: pass
 PY
 )
 [ -z "$BASE" ] && { echo "no base model reachable"; exit 1; }
 echo "base model: $BASE"
 
-echo "== phase 2: dataset (train splits only) =="
-if [ ! -f sft.jsonl ]; then
-  python build_dataset_v2.py --out sft.jsonl --target 9000 || exit 1
-else
-  echo "sft.jsonl exists, keeping it"
-fi
-# graded teacher answers (upload distill.jsonl next to this script to include)
-if [ -f distill.jsonl ]; then
-  cat distill.jsonl >> sft.jsonl
-  echo "merged $(wc -l < distill.jsonl) distilled examples into sft.jsonl"
-fi
+echo "== phase 2: BIG dataset (~50k+; builder merges distill.jsonl + asserts >=20k) =="
+[ -f sft.jsonl ] || python build_dataset_big.py --out sft.jsonl --target 80000 || exit 1
+echo "dataset lines: $(wc -l < sft.jsonl)"
 
-echo "== phase 3: train (Unsloth fast path, vanilla fallback; resume-safe) =="
+echo "== phase 3: full bf16 LoRA on the big AMD GPU (resume-safe) =="
 LAST_CKPT=$(ls -d tuned/checkpoint-* 2>/dev/null | sort -V | tail -1 || true)
-if python -c "import unsloth" 2>/dev/null; then
-  python train_unsloth.py --base "$BASE" --data sft.jsonl --out ./tuned \
-      ${LAST_CKPT:+--resume "$LAST_CKPT"} || exit 1
-else
-  python train_lora_amd.py --base "$BASE" --data sft.jsonl --out ./tuned \
-      ${LAST_CKPT:+--resume "$LAST_CKPT"} || exit 1
-fi
+python train_lora_amd.py --base "$BASE" --data sft.jsonl --out ./tuned \
+    --epochs 2 --batch 16 ${LAST_CKPT:+--resume "$LAST_CKPT"} || exit 1
 
-echo "== phase 4: GPU eval over ~2000 graded tasks =="
-python eval_gpu.py --model ./tuned/merged --n 2000 || exit 1
+echo "== phase 4: GPU eval over ~800 unseen graded tasks =="
+python eval_gpu.py --model ./tuned/merged --n 800 || exit 1
 
 echo "== phase 5: convert + quantize =="
 [ -d llama.cpp ] || git clone --depth 1 https://github.com/ggerganov/llama.cpp
-python llama.cpp/convert_hf_to_gguf.py ./tuned/merged --outfile tuned-final-f16.gguf || exit 1
-cmake -B llama.cpp/build llama.cpp >/dev/null && cmake --build llama.cpp/build -t llama-quantize -j >/dev/null
-./llama.cpp/build/bin/llama-quantize tuned-final-f16.gguf tuned-final-q4km.gguf Q4_K_M || exit 1
+python llama.cpp/convert_hf_to_gguf.py ./tuned/merged --outfile tuned-3b-amd-f16.gguf || exit 1
+cmake -B llama.cpp/build llama.cpp >/dev/null 2>&1 && cmake --build llama.cpp/build -t llama-quantize -j >/dev/null 2>&1
+./llama.cpp/build/bin/llama-quantize tuned-3b-amd-f16.gguf tuned-3b-amd-q4km.gguf Q4_K_M || exit 1
 
 echo "== phase 6: sized post-quant gate (GGUF vs bf16, >=300 tasks) =="
 pip install -q llama-cpp-python 2>/dev/null || true
-python eval_gguf.py --gguf tuned-final-q4km.gguf --n 300 --threads 8 || exit 1
+python eval_gguf.py --gguf tuned-3b-amd-q4km.gguf --n 300 --threads 8 || exit 1
 
 echo ""
 echo "================================================================"
-echo "DONE. Download: tuned-final-q4km.gguf   Paste back: the eval table"
-echo "above + eval_report.json contents."
+echo "DONE. Download: tuned-3b-amd-q4km.gguf   Paste back: the eval table above."
 echo "================================================================"
