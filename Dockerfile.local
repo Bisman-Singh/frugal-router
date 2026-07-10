@@ -1,0 +1,22 @@
+# local-candidate: the scored path plus a baked GGUF answering the cheap
+# categories at zero remote tokens (gated by validation + self-verification).
+FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a1bfc852199fbf
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+
+# Prebuilt CPU wheels: compiling llama.cpp under emulation is not viable.
+RUN pip install --no-cache-dir . && \
+    pip install --no-cache-dir "llama-cpp-python>=0.3.9" \
+      --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+
+COPY models/local.gguf.next /app/models/local.gguf
+
+ENV LOCAL=1 \
+    LOCAL_MODEL_PATH=/app/models/local.gguf \
+    LOCAL_THREADS=2
+
+ENTRYPOINT ["frugal"]
+CMD ["simple"]
