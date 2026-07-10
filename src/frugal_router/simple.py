@@ -47,6 +47,25 @@ CONTRACTS: dict[str, tuple[str, int]] = {
     "code_gen": (f"{_BASE} Output only the complete, correct, self-contained code in one fenced block.", 2500),
 }
 
+# Per-category caps accept env overrides so a trimmed image is a build-arg
+# flip, not a code change: BUDGET_CODE (code_gen/code_debug), BUDGET_REASON
+# (math/logic), BUDGET_GENERAL (everything else).
+_BUDGET_ENV = {"code_gen": "BUDGET_CODE", "code_debug": "BUDGET_CODE",
+               "math": "BUDGET_REASON", "logic": "BUDGET_REASON"}
+
+
+def _contract(category: str) -> tuple[str, int]:
+    system, cap = CONTRACTS.get(category, CONTRACTS["factual"])
+    env = _BUDGET_ENV.get(category, "BUDGET_GENERAL")
+    override = os.environ.get(env)
+    if override:
+        try:
+            cap = min(cap, int(override)) if int(override) > 0 else cap
+        except ValueError:
+            pass
+    return system, cap
+
+
 # Back-compat exports for the eval harness (same (instruction, cap) shape).
 _LEAN = CONTRACTS
 SYSTEM = (
@@ -324,14 +343,26 @@ def _confirm_hard_answer(client, task_id, category, prompt, chain, answer,
     the chain may be the model that just failed). Agreement -> keep the
     primary text. Disagreement -> tiebreak from a DIFFERENT healthy model; the
     majority's own full text is emitted, never a rewrite."""
-    system, budget = CONTRACTS[category]
+    system, budget = _contract(category)
     primary_val = _final_value(category, answer)
     if primary_val is None or time.monotonic() > wall - 60:
         return answer
 
+    # CONFIRM modes: "reason" (default) = reasoning-mode second opinion on the
+    # answering model - most thorough, but hidden reasoning is billed in full;
+    # "cheap" = an effort-none second opinion from the other model family -
+    # an agreement check at a fraction of the cost; "off" = trust validation.
+    mode = os.environ.get("CONFIRM", "reason")
+    if mode == "off":
+        return answer
     try:
-        confirm = _call(client, task_id, category, answered_by, system, prompt,
-                        max(budget * 3, 4000), attempt=90, effort=None)
+        if mode == "cheap":
+            other = next((m for m in chain if m != answered_by), answered_by)
+            confirm = _call(client, task_id, category, other, system, prompt,
+                            budget, attempt=90)
+        else:
+            confirm = _call(client, task_id, category, answered_by, system, prompt,
+                            max(budget * 3, 4000), attempt=90, effort=None)
     except Exception:
         return answer
     confirm_val = _final_value(category, confirm)
@@ -362,7 +393,7 @@ def _solve_task(client, task_id, prompt, category, chain, wall):
     """Contract call -> validate -> corrective re-ask -> other families, all
     deadline-aware. The first non-empty answer is the fallback: a later failed
     retry never replaces an earlier one."""
-    system, budget = CONTRACTS.get(category, CONTRACTS["factual"])
+    system, budget = _contract(category)
     first_nonempty = ""
 
     plan = [(chain[0], budget), (chain[0], budget)]          # primary + corrective

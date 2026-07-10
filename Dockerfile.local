@@ -14,9 +14,17 @@ RUN pip install --no-cache-dir . && \
 
 COPY models/local.gguf.next /app/models/local.gguf
 
+ARG CONFIRM=reason
+ARG BUDGET_CODE=2500
+ARG BUDGET_REASON=8000
+ARG BUDGET_GENERAL=4000
 ENV LOCAL=1 \
     LOCAL_MODEL_PATH=/app/models/local.gguf \
-    LOCAL_THREADS=2
+    LOCAL_THREADS=2 \
+    CONFIRM=$CONFIRM \
+    BUDGET_CODE=$BUDGET_CODE \
+    BUDGET_REASON=$BUDGET_REASON \
+    BUDGET_GENERAL=$BUDGET_GENERAL
 
 ENTRYPOINT ["frugal"]
 CMD ["simple"]
