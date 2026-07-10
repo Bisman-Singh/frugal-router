@@ -3,19 +3,22 @@
 This module is what the submitted image runs — one consolidated pipeline, no
 dead branches. Design rules, in order:
 
-1. Known-available models only in the critical path. The general workhorse and
-   the code specialist have answered every scored run; the Gemma tiers are
-   opportunistic last-resort fallbacks, never load-bearing (they are on-demand
-   deployments that can 404).
+1. Known-available CHAT models only in the critical path (non-chat entries in
+   ALLOWED_MODELS are filtered out). The Gemma tiers are opportunistic
+   last-resort fallbacks, never load-bearing.
 2. Deterministic solvers first: prove-or-defer, exact by construction.
-3. One primary call per task with a category contract (terse instruction +
-   budget), reasoning suppressed.
-4. VALIDATE the answer against the category's acceptance checks. Never rewrite
-   an answer; on failure RE-ASK — first the same model with the requirement
-   spelled out, then a different model family, then (hard categories) the
-   reasoning mode. Escalation only on validated failure.
-5. Never exit non-zero; never blow the 10-minute wall; record every request in
-   an inference ledger written next to the results.
+3. One primary call per task with a category contract, reasoning suppressed;
+   a generation cut at max_tokens is retried once with a doubled budget.
+4. VALIDATE the answer. Checks are correctness-bearing where a regex can be:
+   an explicit final value for math/logic, entity lines for NER, a fenced
+   block for code, length constraints for summaries. Well-shaped answers to
+   the hard categories are additionally CONFIRMED by a second, reasoning-mode
+   opinion; a disagreement goes to a cross-model tiebreak and the majority's
+   full text is emitted. Answers are never rewritten.
+5. Escalation on validated failure walks: corrective re-ask -> other model
+   family -> opportunistic tier, bounded and deadline-aware per task.
+6. Never exit non-zero; never blow the 10-minute wall; every request lands in
+   a run-scoped inference ledger with category, duration, and finish reason.
 """
 from __future__ import annotations
 
@@ -33,7 +36,6 @@ from pathlib import Path
 
 _BASE = "English only. Be concise; no preamble."
 
-# category -> (system instruction, max_tokens for the primary attempt)
 CONTRACTS: dict[str, tuple[str, int]] = {
     "factual": (f"{_BASE} Answer accurately and completely in under 120 words.", 700),
     "math": (f"{_BASE} Show brief steps, then end with 'Answer: <value>' on its own line.", 1500),
@@ -58,14 +60,18 @@ REFEREE_SYSTEM = (
 )
 
 _CODE_MODELS = ["kimi-k2p7-code", "code", "kimi"]
-_GENERAL_MODELS = [h.strip() for h in os.environ.get(
-    "GENERAL_HINTS", "minimax,gemma-4-31b-it,gemma").split(",") if h.strip()]
 _OPPORTUNISTIC = ["gemma-4-31b-it", "gemma"]  # never load-bearing
+# Entries in ALLOWED_MODELS that cannot serve chat completions at all.
+_NON_CHAT = re.compile(r"(?i)flux|image|audio|whisper|embed|tts|guard|moderat|rerank|ocr|video")
 
 _FENCE = re.compile(r"```[a-zA-Z0-9]*\n(.*?)```", re.DOTALL)
 _THINK = re.compile(r"(?s)<(?:think|thought)>.*?(?:</(?:think|thought)>|\Z)\s*")
 _UNCLOSED_THINK = re.compile(r"(?i)<(?:think|thought)>(?!.*</(?:think|thought)>)", re.DOTALL)
 _TRAILING_CLOSE = re.compile(r"(?is)^.*?</(?:think|thought)>\s*")
+_ANSWER_LINE = re.compile(r"(?im)^\s*\**answer\**\s*[:=]\s*(.+?)\s*$")
+_NER_LINE = re.compile(r"(?im)^\s*\**\s*(person|organization|location|date)s?\s*\**\s*[:=]\s*\S")
+_NON_ANSWER = re.compile(r"(?i)^\s*(i (do not|don't) know|unclear|it is unclear|cannot determine|"
+                         r"not enough information|as an ai)")
 
 # ----------------------------------------------------------------- ledger ---
 
@@ -73,8 +79,10 @@ LEDGER: list[dict] = []
 _ledger_lock = threading.Lock()
 
 
-def _record(task_id: str, model: str, status: str, attempt: int, usage) -> None:
-    entry = {"task_id": task_id, "model": model, "status": status, "attempt": attempt,
+def _record(task_id, category, model, status, attempt, usage, finish, dur_ms) -> None:
+    entry = {"task_id": task_id, "category": category, "model": model,
+             "status": status, "attempt": attempt, "finish_reason": finish,
+             "duration_ms": int(dur_ms),
              "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
              "completion_tokens": getattr(usage, "completion_tokens", 0) or 0}
     with _ledger_lock:
@@ -90,9 +98,13 @@ def validate(category: str, prompt: str, answer: str) -> str | None:
     if not a:
         return "a non-empty answer is required"
     low = a.lower()
+    if _NON_ANSWER.match(a):
+        return "commit to a concrete answer to the task"
 
     if category == "math":
-        if not re.search(r"-?\d", a):
+        m = _ANSWER_LINE.search(a)
+        tail_number = re.search(r"-?\d[\d,]*(?:\.\d+)?", (m.group(1) if m else a[-80:]))
+        if not tail_number:
             return "end with 'Answer: <numeric value>' on its own line"
 
     elif category == "sentiment":
@@ -101,14 +113,17 @@ def validate(category: str, prompt: str, answer: str) -> str | None:
         if len(labels) != 1:
             return ("state exactly one sentiment label - positive, negative, or "
                     "neutral - followed by a brief justification")
+        if len(a.split()) < 4:
+            return "add one short sentence justifying the label"
 
     elif category == "ner":
-        hits = sum(1 for l in ("person", "organization", "location", "date") if l in low)
-        if hits < 2:
+        if len(_NER_LINE.findall(a)) < 2:
             return ("list each entity as 'label: value' on its own line using the "
                     "labels person, organization, location, date")
 
     elif category == "summarization":
+        if len(a.split()) < 5:
+            return "write a complete summary sentence"
         m = re.search(r"(?i)\bin\s+(one|a single|two|three|\d+)\s+sentences?\b", prompt)
         if m:
             word = m.group(1).lower()
@@ -118,16 +133,16 @@ def validate(category: str, prompt: str, answer: str) -> str | None:
             if len(sentences) > want:
                 return f"the summary must be at most {want} sentence(s)"
         m = re.search(r"(?i)\bin\s+(\d+)\s+words?\b", prompt)
-        if m and len(a.split()) > int(m.group(1)) * 1.5:
-            return f"the summary must be about {m.group(1)} words"
+        if m and len(a.split()) > int(m.group(1)) * 1.15:
+            return f"the summary must be at most {m.group(1)} words"
 
     elif category in ("code_gen", "code_debug"):
         block = _FENCE.search(a)
-        code = block.group(1) if block else a
+        if block is None:
+            return "provide the complete code in one fenced code block"
+        code = block.group(1)
         is_python = bool(re.search(r"(?i)\bpython\b", prompt)) or bool(
             re.search(r"^\s*(def |import |from |class )", code, re.MULTILINE))
-        if block is None and category == "code_gen":
-            return "provide the code in one fenced code block"
         if is_python:
             try:
                 ast.parse(code)
@@ -135,11 +150,40 @@ def validate(category: str, prompt: str, answer: str) -> str | None:
                 return "provide complete, syntactically valid code in one fenced block"
 
     elif category == "logic":
-        if re.search(r"(?i)\b(yes or no|true or false)\b", prompt) and not \
-                re.search(r"\b(yes|no|true|false)\b", low):
-            return "state the final yes/no answer explicitly"
+        if re.search(r"(?i)\b(yes or no|true or false)\b", prompt):
+            if not re.search(r"\b(yes|no|true|false)\b", low):
+                return "state the final yes/no answer explicitly"
+        elif not _ANSWER_LINE.search(a):
+            return "end with 'Answer: <value>' on its own line"
+
+    elif category == "factual":
+        if len(a) < 15:
+            return "answer the question in one to three complete sentences"
 
     return None
+
+
+def _final_value(category: str, text: str) -> str | None:
+    """Extract the final value for cross-attempt AGREEMENT comparison only
+    (never for emission). Math -> last number on the Answer line / tail;
+    logic -> yes/no/true/false or the Answer-line value."""
+    a = (text or "").strip()
+    if not a:
+        return None
+    m = _ANSWER_LINE.search(a)
+    scope = m.group(1) if m else a[-120:]
+    if category == "math":
+        nums = re.findall(r"-?\d[\d,]*(?:\.\d+)?", scope.replace("$", "").replace("%", ""))
+        if not nums:
+            return None
+        try:
+            return f"{float(nums[-1].replace(',', '')):g}"
+        except ValueError:
+            return None
+    yn = re.findall(r"(?i)\b(yes|no|true|false)\b", scope)
+    if yn:
+        return yn[-1].lower()
+    return re.sub(r"[^a-z0-9]+", "", scope.lower()) or None
 
 # ------------------------------------------------------------------ client --
 
@@ -148,7 +192,7 @@ def _client(key, base):
     from openai import OpenAI
 
     return OpenAI(api_key=key, base_url=base,
-                  timeout=float(os.environ.get("TIMEOUT_S", "45")), max_retries=1)
+                  timeout=float(os.environ.get("TIMEOUT_S", "35")), max_retries=1)
 
 
 def _pick(allowed, hints):
@@ -159,72 +203,123 @@ def _pick(allowed, hints):
     return ""
 
 
-def _call(client, task_id, model, system, prompt, max_tokens, attempt,
+def _call(client, task_id, category, model, system, prompt, max_tokens, attempt,
           temperature=0.0, effort="none"):
-    """One completion with reasoning suppressed by default. Returns cleaned
-    text ('' for an all-thought reply). Raises on transport errors so the
-    caller can walk its model chain."""
-    kwargs = dict(model=model,
-                  messages=[{"role": "system", "content": system},
-                            {"role": "user", "content": prompt}],
-                  temperature=temperature, max_tokens=max_tokens)
-    if effort:
-        kwargs["extra_body"] = {"reasoning_effort": effort}
-    try:
-        resp = client.chat.completions.create(**kwargs)
-    except Exception as exc:
-        msg = str(exc).lower()
-        if effort and any(s in msg for s in ("reasoning_effort", "unsupported",
-                                             "unknown parameter", "extra")):
-            kwargs.pop("extra_body", None)
+    """One completion, reasoning suppressed by default. A generation cut at
+    max_tokens is retried once with a doubled budget. Returns cleaned text
+    ('' for an all-thought reply). Raises on transport errors."""
+    cap = max_tokens
+    for round_ in range(2):
+        kwargs = dict(model=model,
+                      messages=[{"role": "system", "content": system},
+                                {"role": "user", "content": prompt}],
+                      temperature=temperature, max_tokens=cap)
+        if effort:
+            kwargs["extra_body"] = {"reasoning_effort": effort}
+        t0 = time.monotonic()
+        try:
             resp = client.chat.completions.create(**kwargs)
-        else:
-            _record(task_id, model, f"error:{type(exc).__name__}", attempt, None)
-            raise
-    _record(task_id, model, "ok", attempt, getattr(resp, "usage", None))
-    text = (resp.choices[0].message.content or "").strip()
-    if _UNCLOSED_THINK.search(text):
-        return ""  # cut off mid-reasoning: no answer in this response at all
-    text = _THINK.sub("", text).strip()
-    if re.search(r"(?i)</(?:think|thought)>", text):
-        text = _TRAILING_CLOSE.sub("", text).strip()
-    return text
+        except Exception as exc:
+            msg = str(exc).lower()
+            if effort and any(s in msg for s in ("reasoning_effort", "unsupported",
+                                                 "unknown parameter", "extra")):
+                kwargs.pop("extra_body", None)
+                try:
+                    resp = client.chat.completions.create(**kwargs)
+                except Exception as exc2:
+                    _record(task_id, category, model, f"error:{type(exc2).__name__}",
+                            attempt, None, None, (time.monotonic() - t0) * 1000)
+                    raise
+            else:
+                _record(task_id, category, model, f"error:{type(exc).__name__}",
+                        attempt, None, None, (time.monotonic() - t0) * 1000)
+                raise
+        choice = resp.choices[0]
+        finish = getattr(choice, "finish_reason", None)
+        _record(task_id, category, model, "ok", attempt,
+                getattr(resp, "usage", None), finish, (time.monotonic() - t0) * 1000)
+        text = (choice.message.content or "").strip()
+        if finish == "length" and round_ == 0:
+            cap = cap * 2  # cut mid-generation: one retry with real room
+            continue
+        if _UNCLOSED_THINK.search(text):
+            return ""  # all-thought reply: no answer in this response
+        text = _THINK.sub("", text).strip()
+        if re.search(r"(?i)</(?:think|thought)>", text):
+            text = _TRAILING_CLOSE.sub("", text).strip()
+        return text
+    return ""
 
 # ------------------------------------------------------------------- solve --
 
 
-def _solve_task(client, task_id, prompt, category, chain):
-    """Contract call -> validate -> corrective re-ask on the same model ->
-    cross-model -> (hard categories) reasoning mode. Returns the best answer
-    seen; escalation happens only on validated failure."""
+def _confirm_hard_answer(client, task_id, category, prompt, chain, answer, wall):
+    """Math/logic answers that LOOK right still get one reasoning-mode second
+    opinion. Agreement -> keep the primary text. Disagreement -> cross-model
+    tiebreak; the majority's own full text is emitted, never a rewrite."""
+    system, budget = CONTRACTS[category]
+    primary_val = _final_value(category, answer)
+    if primary_val is None or time.monotonic() > wall - 40:
+        return answer
+
+    try:
+        confirm = _call(client, task_id, category, chain[0], system, prompt,
+                        max(budget * 3, 4000), attempt=90, effort=None)
+    except Exception:
+        return answer
+    confirm_val = _final_value(category, confirm)
+    if confirm_val is None or confirm_val == primary_val:
+        return answer
+
+    # Disagreement: a third opinion from a different model family breaks it.
+    tiebreak, tiebreak_val = "", None
+    if len(chain) > 1 and time.monotonic() < wall - 30:
+        try:
+            tiebreak = _call(client, task_id, category, chain[1], system, prompt,
+                             budget, attempt=91)
+            tiebreak_val = _final_value(category, tiebreak)
+        except Exception:
+            pass
+    if tiebreak_val == primary_val:
+        return answer
+    if tiebreak_val == confirm_val and validate(category, prompt, confirm) is None:
+        return confirm
+    # No majority: prefer the reasoning-mode answer when it validates.
+    if validate(category, prompt, confirm) is None:
+        return confirm
+    return answer
+
+
+def _solve_task(client, task_id, prompt, category, chain, wall):
+    """Contract call -> validate -> corrective re-ask -> other families, all
+    deadline-aware. The first non-empty answer is the fallback: a later failed
+    retry never replaces an earlier one."""
     system, budget = CONTRACTS.get(category, CONTRACTS["factual"])
-    best = ""
+    first_nonempty = ""
 
-    attempts = [(chain[0], "none", 0.0, budget),
-                (chain[0], "none", 0.0, budget)]      # corrective re-ask
-    for extra in chain[1:]:
-        attempts.append((extra, "none", 0.0, budget))  # different model family
-    if category in ("math", "logic", "code_debug"):
-        # A genuinely different mode, not a reroll: reasoning ON, larger budget.
-        attempts.append((chain[0], None, 0.3, max(budget * 3, 4000)))
-
+    plan = [(chain[0], budget), (chain[0], budget)]          # primary + corrective
+    plan += [(m, budget) for m in chain[1:]]                  # other families
     requirement = None
-    for i, (model, effort, temp, cap) in enumerate(attempts):
+    for i, (model, cap) in enumerate(plan):
         if i == 1 and requirement is None:
-            continue  # first answer validated: the re-ask slot is skipped
+            continue  # primary validated: corrective slot unused
+        if time.monotonic() > wall - 25:
+            break     # leave room for the flush; a partial beats a blank batch
         ask = prompt if not requirement else f"{prompt}\n\nRequirement: {requirement}."
         try:
-            answer = _call(client, task_id, model, system, ask, cap, i,
-                           temperature=temp, effort=effort)
+            answer = _call(client, task_id, category, model, system, ask, cap, i)
         except Exception:
-            continue  # transport failure: walk the chain
+            continue
         problem = validate(category, prompt, answer)
-        if answer:
-            best = answer
+        if answer and not first_nonempty:
+            first_nonempty = answer
         if problem is None:
+            if category in ("math", "logic"):
+                return _confirm_hard_answer(client, task_id, category, prompt,
+                                            chain, answer, wall)
             return answer
         requirement = problem
-    return best
+    return first_nonempty
 
 # -------------------------------------------------------------------- main --
 
@@ -234,6 +329,8 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
     max_workers = int(os.environ.get("WORKERS", max_workers or 6))
     deadline_s = float(os.environ.get("DEADLINE_S", "510"))
     started = time.monotonic()
+    wall = started + deadline_s
+    LEDGER.clear()  # run-scoped audit trail
 
     answers: dict[str, str] = {}
     tasks = _read(input_path, answers)
@@ -244,7 +341,6 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
     total = len(tasks)
     solver_hits = 0
 
-    # Deterministic solvers: exact answers at zero tokens, no API needed.
     if os.environ.get("SOLVERS", "1") != "0":
         from .solvers import solve_any
 
@@ -262,7 +358,8 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
 
     key = os.environ.get("FIREWORKS_API_KEY")
     base = os.environ.get("FIREWORKS_BASE_URL") or "https://api.fireworks.ai/inference/v1"
-    allowed = [m.strip() for m in os.environ.get("ALLOWED_MODELS", "").split(",") if m.strip()]
+    allowed_all = [m.strip() for m in os.environ.get("ALLOWED_MODELS", "").split(",") if m.strip()]
+    allowed = [m for m in allowed_all if not _NON_CHAT.search(m)] or allowed_all
 
     if tasks and key and allowed:
         from .backends.fireworks import normalize_base_url  # noqa
@@ -270,20 +367,24 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
         from .tasks import Task
 
         client = _client(key, normalize_base_url(base))
-        gen_model = _pick(allowed, _GENERAL_MODELS) or allowed[0]
+        general_hints = [h.strip() for h in os.environ.get(
+            "GENERAL_HINTS", "minimax,gemma-4-31b-it,gemma").split(",") if h.strip()]
+        gen_model = _pick(allowed, general_hints) or allowed[0]
         code_model = _pick(allowed, _CODE_MODELS) or gen_model
         extra_model = _pick(allowed, _OPPORTUNISTIC)
 
         def chain_for(category: str) -> list[str]:
-            # Known-available models carry the chain; the opportunistic tier
-            # is a last resort only. No model appears twice.
             if category in ("code_gen", "code_debug"):
                 chain = [code_model, gen_model]
             else:
                 chain = [gen_model, code_model]
-            if extra_model and extra_model not in chain:
+            if extra_model:
                 chain.append(extra_model)
-            return [m for m in chain if m]
+            deduped: list[str] = []
+            for m in chain:
+                if m and m not in deduped:
+                    deduped.append(m)
+            return deduped
 
         def work(task):
             tid, prompt = task
@@ -293,15 +394,13 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
                 category = "factual"
             try:
                 answers[tid] = _solve_task(client, tid, prompt, category,
-                                           chain_for(category))
+                                           chain_for(category), wall)
             except Exception as exc:
                 print(f"task {tid} unhandled: {type(exc).__name__}: {exc}", file=sys.stderr)
             _write(output_path, answers)
 
-        # Watchdog: results are flushed and the process exits 0 before the
-        # wall no matter what wedges. Unanswered ids are logged loudly.
         def _watchdog():
-            time.sleep(max(5.0, started + deadline_s - time.monotonic()))
+            time.sleep(max(5.0, wall - time.monotonic()))
             empty = [t for t, a in answers.items() if not a.strip()]
             if empty:
                 print(f"watchdog: {len(empty)} unanswered at the wall: {empty}",
@@ -352,16 +451,19 @@ def _read(input_path, answers):
     tasks, seen = [], set()
     for i, item in enumerate(raw if isinstance(raw, list) else []):
         if not isinstance(item, dict):
-            print(f"skipping malformed task record #{i}", file=sys.stderr)
+            print(f"WARNING: skipping malformed task record #{i}: {item!r}", file=sys.stderr)
             continue
         tid = str(item.get("task_id", f"task-{i}"))
         if tid in seen:
-            print(f"duplicate task_id {tid!r}: keeping the first occurrence",
+            print(f"WARNING: duplicate task_id {tid!r}: keeping the first occurrence",
                   file=sys.stderr)
             continue
+        prompt = str(item.get("prompt", ""))
+        if not prompt.strip():
+            print(f"WARNING: task {tid!r} has an empty prompt", file=sys.stderr)
         seen.add(tid)
         answers[tid] = ""
-        tasks.append((tid, str(item.get("prompt", ""))))
+        tasks.append((tid, prompt))
     return tasks
 
 

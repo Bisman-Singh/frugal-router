@@ -60,6 +60,22 @@ def main(argv=None) -> int:
 
 
 def _dispatch(args) -> int:
+    if args.command == "simple":
+        from .simple import run_simple
+
+        return run_simple(args.input, args.output)
+
+    # Every other subcommand needs the config-driven agent, which the slim
+    # scored image does not ship. Fail loudly rather than writing blank
+    # answers with a success exit code.
+    if not os.path.exists(args.config):
+        print(
+            f"error: config not found at {args.config!r}. The scored image only "
+            f"supports 'frugal simple'; run other commands from the repository.",
+            file=sys.stderr,
+        )
+        return 2
+
     if args.command == "harness":
         from .harness import run_batch
 
@@ -69,11 +85,6 @@ def _dispatch(args) -> int:
             config_path=args.config,
             time_budget_s=args.time_budget,
         )
-
-    if args.command == "simple":
-        from .simple import run_simple
-
-        return run_simple(args.input, args.output)
 
     from .config import build_agent, load_settings
 
