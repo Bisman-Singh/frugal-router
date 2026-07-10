@@ -52,8 +52,12 @@ def one_run(idx: int, tasks: list[dict], args) -> dict:
     t0 = time.monotonic()
     src = str(Path(__file__).resolve().parents[1] / "src")
     code = RUN_SNIPPET.format(src=src, inp=str(inp), outp=str(outp))
-    proc = subprocess.run([sys.executable, "-c", code], env=env,
-                          capture_output=True, text=True, timeout=560)
+    try:
+        proc = subprocess.run([sys.executable, "-c", code], env=env,
+                              capture_output=True, text=True, timeout=560)
+        rc = proc.returncode
+    except subprocess.TimeoutExpired:
+        rc = -9  # a wedged run is a finding to record, never a campaign crash
     wall = time.monotonic() - t0
 
     results = {r["task_id"]: r["answer"]
@@ -74,7 +78,7 @@ def one_run(idx: int, tasks: list[dict], args) -> dict:
         "acc": round(correct / max(1, len(tasks)), 3),
         "tokens": (log.get("prompt_tokens", 0) or 0) + (log.get("completion_tokens", 0) or 0),
         "local": None, "solver": log.get("solver_answered"),
-        "wall_s": round(wall, 1), "exit": proc.returncode,
+        "wall_s": round(wall, 1), "exit": rc,
     }
     # count locally-answered from the full ledger
     if logp.exists():
