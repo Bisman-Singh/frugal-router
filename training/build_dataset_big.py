@@ -26,14 +26,17 @@ SYSTEMS.setdefault("code_debug", "English only. Be concise; no preamble. Name th
 _MUT = [("==", "!="), ("<", "<="), ("+", "-"), ("return ", "return not "), ("range(", "range(1, ")]
 
 
-def _ld(name, config=None, split="train", streaming=True):
+def _ld(name, config=None, split="train"):
     from datasets import load_dataset
-    return load_dataset(name, config, split=split, streaming=streaming)
+    try:
+        return load_dataset(name, config, split=split, streaming=True, trust_remote_code=True)
+    except TypeError:
+        return load_dataset(name, config, split=split, streaming=True)
 
 
 def sst2(n):
     out = []
-    for r in _ld("stanfordnlp/sst2", "default"):
+    for r in _ld("stanfordnlp/sst2"):
         t = (r.get("sentence") or "").strip()
         if len(t) < 20:
             continue
@@ -62,7 +65,7 @@ def gsm8k(n):
 
 def xsum(n):
     out = []
-    for r in _ld("EdinburghNLP/xsum", "default"):
+    for r in _ld("EdinburghNLP/xsum"):
         doc, summ = " ".join(r["document"].split()), r["summary"].strip()
         if len(doc.split()) < 60 or len(summ.split()) < 6:
             continue
@@ -75,7 +78,7 @@ def xsum(n):
 
 def alpaca(n):
     out = []
-    for r in _ld("yahma/alpaca-cleaned", "default"):
+    for r in _ld("yahma/alpaca-cleaned"):
         ins, inp, tgt = (r.get("instruction") or "").strip(), (r.get("input") or "").strip(), (r.get("output") or "").strip()
         if not ins or not tgt or len(tgt) > 600 or (inp and len(inp) > 400):
             continue
@@ -119,7 +122,7 @@ def main():
     args = ap.parse_args()
     rng = random.Random(29)
 
-    data = from_generators(rng, n_per_cat=1500)   # 5 cats -> ~7.5k computed-answer
+    data = from_generators(rng, n_per_cat=5000)   # 5 cats -> 25k computed-answer FLOOR
     for name, fn in (("sst2", lambda: sst2(18000)), ("gsm8k", lambda: gsm8k(7000)),
                      ("xsum", lambda: xsum(15000)), ("alpaca", lambda: alpaca(18000)),
                      ("mbpp", lambda: mbpp(400, 400))):
@@ -139,8 +142,18 @@ def main():
     with open(args.out, "w", encoding="utf-8") as f:
         for ex in data:
             f.write(json.dumps(ex, ensure_ascii=False) + "\n")
+    from collections import Counter
+    cats = Counter()
+    for ex in data:
+        sysm = ex["messages"][0]["content"]
+        for c, key in [("code","fenced"),("code","corrected"),("math","Answer:"),("sentiment","sentiment label"),
+                       ("ner","label: value"),("summarization","summary"),("logic","constraint"),("factual","120 words"),("general","Be concise; no preamble. If")]:
+            if key in sysm: cats[c]+=1; break
+        else: cats["?"]+=1
     unsure = sum(1 for ex in data if ex["messages"][2]["content"] == "UNSURE")
     print(f"wrote {len(data)} -> {args.out}  (UNSURE {unsure} = {unsure/max(1,len(data)):.0%})")
+    print(f"category mix: {dict(cats)}")
+    assert len(data) >= 20000, f"DATASET TOO SMALL ({len(data)}) - a source failed; not training on this"
 
 
 if __name__ == "__main__":
