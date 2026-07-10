@@ -81,10 +81,12 @@ def main():
     trainer = SFTTrainer(model=model, args=cfg, train_dataset=ds)
     trainer.train(resume_from_checkpoint=args.resume)
 
-    print("merging LoRA into fp16 base...")
-    merged = trainer.model.merge_and_unload()
-    merged.save_pretrained(f"{args.out}/merged", safe_serialization=True)
-    tok.save_pretrained(f"{args.out}/merged")
+    print("merging + saving (Unsloth native, avoids transformers reverse_op bug)...")
+    try:
+        model.save_pretrained_merged(f"{args.out}/merged", tok, save_method="merged_16bit")
+    except Exception as e:
+        print(f"native merged save failed ({e}); trying direct GGUF export")
+        model.save_pretrained_gguf(f"{args.out}/gguf", tok, quantization_method="q4_k_m")
     print(f"DONE -> {args.out}/merged")
 
 
