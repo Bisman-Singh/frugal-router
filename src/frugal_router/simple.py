@@ -60,7 +60,11 @@ def _pick(allowed, hints):
 
 
 def run_simple(input_path="/input/tasks.json", output_path="/output/results.json",
-               max_workers=8, per_task_max_tokens=1200):
+               max_workers=None, per_task_max_tokens=None):
+    # Tunable via environment so image variants need no code change.
+    max_workers = int(os.environ.get("WORKERS", max_workers or 8))
+    per_task_max_tokens = int(os.environ.get("RETRY_TOKENS", per_task_max_tokens or 1200))
+    deadline_s = float(os.environ.get("DEADLINE_S", "510"))  # rule: 10-min wall
     started = time.monotonic()
     answers: dict[str, str] = {}
     tasks = _read(input_path, answers)
@@ -101,14 +105,14 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
 
     def route(prompt: str) -> tuple[str, int]:
         if _CODE_HINT.search(prompt):
-            return code_model, 6000
+            return code_model, int(os.environ.get("BUDGET_CODE", "6000"))
         if _REASON_HINT.search(prompt):
             # Reasoning model, reasoning left ON, room for thought + answer.
             # Board evidence: capping this budget truncates the reasoning and
             # blanks exactly the hard tasks; the request-time rule is not
             # enforced at a level that punishes the longer generation.
-            return reason_model, 8000
-        return gen_model, 4000
+            return reason_model, int(os.environ.get("BUDGET_REASON", "8000"))
+        return gen_model, int(os.environ.get("BUDGET_GENERAL", "4000"))
 
     # LEAN=1: token-war mode. Zero-token classification + deterministic solvers
     # answer provable math/logic free; every other task is ONE call with a terse
@@ -200,8 +204,21 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
         answers[tid] = final
         _write(output_path, answers)
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        list(pool.map(solve, tasks))
+    # Watchdog: whatever wedges (hung socket, stuck executor), a valid results
+    # file exists and the process exits 0 before the 10-minute wall.
+    def _watchdog():
+        time.sleep(max(5.0, started + deadline_s - time.monotonic()))
+        _write(output_path, answers)
+        print("watchdog: flushed results before the wall", file=sys.stderr)
+        os._exit(0)
+
+    __import__("threading").Thread(target=_watchdog, daemon=True).start()
+
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            list(pool.map(solve, tasks))
+    except Exception as exc:  # a worker crash must never cost the exit code
+        print(f"pool error: {type(exc).__name__}: {exc}", file=sys.stderr)
 
     _write(output_path, answers)
     print(json.dumps({"tasks": len(tasks), "answered": sum(1 for v in answers.values() if v),
@@ -212,7 +229,8 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
 def _client(key, base):
     from openai import OpenAI
 
-    return OpenAI(api_key=key, base_url=base, timeout=55.0, max_retries=1)
+    return OpenAI(api_key=key, base_url=base,
+                  timeout=float(os.environ.get("TIMEOUT_S", "55")), max_retries=1)
 
 
 _THINK = re.compile(r"(?s)<(?:think|thought)>.*?(?:</(?:think|thought)>|\Z)\s*")
@@ -334,10 +352,18 @@ def _call(client, model, prompt, max_tokens, temperature=0.0, effort=None):
     try:
         resp = client.chat.completions.create(**kwargs)
     except Exception as exc:
+        msg = str(exc).lower()
         # Models that reject the reasoning knob get one plain retry.
-        if effort and any(s in str(exc).lower() for s in
+        if effort and any(s in msg for s in
                           ("reasoning_effort", "unsupported", "unknown parameter", "extra")):
             kwargs.pop("extra_body", None)
+            resp = client.chat.completions.create(**kwargs)
+        elif "404" in msg or "not found" in msg:
+            # The id form the proxy expects may differ from ALLOWED_MODELS:
+            # retry once with the alternate bare/full-path form.
+            alt = (model.rsplit("/", 1)[-1] if "/" in model
+                   else f"accounts/fireworks/models/{model}")
+            kwargs["model"] = alt
             resp = client.chat.completions.create(**kwargs)
         else:
             raise
