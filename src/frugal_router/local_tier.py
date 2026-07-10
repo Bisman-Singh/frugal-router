@@ -14,6 +14,7 @@ crashing it.
 from __future__ import annotations
 
 import os
+import re
 import threading
 import time
 
@@ -21,8 +22,11 @@ _LOCK = threading.Lock()
 _LLM = None
 _DISABLED = False
 
+_SUFFIX = os.environ.get("LOCAL_SUFFIX", "")  # e.g. "/no_think" for hybrid-thinking models
+_THINK_RE = re.compile(r"(?s)<(?:think|thought)>.*?(?:</(?:think|thought)>|\Z)\s*")
+
 # max new tokens per category: answers here are short by construction
-CAPS = {"sentiment": 40, "factual": 100, "summarization": 70, "ner": 90}
+CAPS = {"sentiment": 40, "factual": 100, "summarization": 70, "ner": 90, "logic": 80}
 CATEGORIES = frozenset(CAPS)
 
 
@@ -61,12 +65,13 @@ def generate(system: str, prompt: str, max_tokens: int, temperature: float = 0.0
     with _LOCK:
         try:
             out = llm.create_chat_completion(
-                messages=[{"role": "system", "content": system},
+                messages=[{"role": "system", "content": (system + " " + _SUFFIX).strip()},
                           {"role": "user", "content": prompt}],
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-            return (out["choices"][0]["message"]["content"] or "").strip()
+            text = (out["choices"][0]["message"]["content"] or "").strip()
+            return _THINK_RE.sub("", text).strip()
         except Exception:
             return ""
 
@@ -85,12 +90,13 @@ def verify(prompt: str, answer: str) -> bool:
     with _LOCK:
         try:
             out = llm.create_chat_completion(
-                messages=[{"role": "system", "content": "You are a strict, skeptical grader."},
+                messages=[{"role": "system", "content": ("You are a strict, skeptical grader. " + _SUFFIX).strip()},
                           {"role": "user", "content": question}],
-                max_tokens=4,
+                max_tokens=16,
                 temperature=0.0,
             )
-            text = (out["choices"][0]["message"]["content"] or "").strip().upper()
+            text = (out["choices"][0]["message"]["content"] or "").strip()
+            text = _THINK_RE.sub("", text).strip().upper()
             return text.startswith("YES")
         except Exception:
             return False

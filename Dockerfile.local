@@ -12,8 +12,10 @@ RUN pip install --no-cache-dir . && \
     pip install --no-cache-dir "llama-cpp-python>=0.3.9" \
       --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 
-COPY models/local.gguf.next /app/models/local.gguf
+ARG GGUF=models/local.gguf.next
+COPY $GGUF /app/models/local.gguf
 
+ARG LOCAL_SUFFIX=""
 ARG CONFIRM=reason
 ARG BUDGET_CODE=2500
 ARG BUDGET_REASON=8000
@@ -21,6 +23,7 @@ ARG BUDGET_GENERAL=4000
 ENV LOCAL=1 \
     LOCAL_MODEL_PATH=/app/models/local.gguf \
     LOCAL_THREADS=2 \
+    LOCAL_SUFFIX=$LOCAL_SUFFIX \
     CONFIRM=$CONFIRM \
     BUDGET_CODE=$BUDGET_CODE \
     BUDGET_REASON=$BUDGET_REASON \

@@ -299,6 +299,11 @@ def _try_local(task_id, category, prompt, wall):
         if re.search(r"(?i)\b(who|when|where|which|whom)\b", prompt) or \
                 not re.match(r"(?i)\s*(explain|describe|define|what is|what are|how do|how does|why)", prompt.strip()):
             return None
+    # Logic stays local ONLY for explicit yes/no-style questions, where the
+    # answer space is binary and the validator demands a committed label;
+    # ordering/constraint puzzles escalate (solvers or remote).
+    if category == "logic" and not re.search(r"(?i)\b(yes or no|true or false)\b", prompt):
+        return None
     # Local generation is serialized and slow on the judge box: only start it
     # while there is comfortably enough wall left for the remote fallback too.
     if time.monotonic() > wall - 240:
@@ -314,13 +319,15 @@ def _try_local(task_id, category, prompt, wall):
     answer = local_tier.generate(system, prompt, cap)
     if not answer or validate(category, prompt, answer) is not None:
         return None
-    if category == "sentiment":
+    if category in ("sentiment", "logic"):
         # agreement gate: a second sample at a different temperature must
         # land on the same label, or the task escalates
+        vocab = ("positive", "negative", "neutral") if category == "sentiment" \
+            else ("yes", "no", "true", "false")
         second = local_tier.generate(system, prompt, cap, temperature=0.6)
         labels = []
         for text in (answer, second):
-            found = [l for l in ("positive", "negative", "neutral") if l in text.lower()]
+            found = [l for l in vocab if re.search(rf"\b{l}\b", text.lower())]
             labels.append(found[0] if len(found) == 1 else None)
         if labels[0] is None or labels[0] != labels[1]:
             return None
