@@ -34,6 +34,7 @@ def main():
         dtype=torch.bfloat16,
         load_in_4bit=False,   # full-precision LoRA: MI300 has the room
     )
+    tok = getattr(tok, "tokenizer", tok)  # Qwen3.5 returns a multimodal processor
     model = FastLanguageModel.get_peft_model(
         model, r=16, lora_alpha=32, lora_dropout=0.05,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",

@@ -48,6 +48,7 @@ def main():
           "| device:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "cpu")
 
     tok = AutoTokenizer.from_pretrained(args.base)
+    tok = getattr(tok, "tokenizer", tok)  # Qwen3.5 returns a multimodal processor
     rows = [json.loads(l) for l in open(args.data, encoding="utf-8")]
 
     def render(ex):

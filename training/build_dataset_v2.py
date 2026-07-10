@@ -84,6 +84,28 @@ def from_mbpp(n_gen=700, n_dbg=700):
     return gen + dbg
 
 
+def from_alpaca(n=900):
+    """General instruction-following slice: guards against format collapse on
+    out-of-template phrasing (the missing ~11% of the mix)."""
+    from fetch_bench import rows
+    out = []
+    for r in rows("yahma/alpaca-cleaned", "default", "train", n * 2):
+        instr = (r.get("instruction") or "").strip()
+        inp = (r.get("input") or "").strip()
+        target = (r.get("output") or "").strip()
+        if not instr or not target or len(target) > 600 or inp and len(inp) > 400:
+            continue
+        prompt = instr if not inp else f"{instr}\n\n{inp}"
+        out.append({"messages": [
+            {"role": "system", "content": "English only. Be concise; no preamble." + ABSTAIN_NOTE},
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": target},
+        ]})
+        if len(out) >= n:
+            break
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="sft.jsonl")
@@ -95,7 +117,8 @@ def main():
     for name, fn in (("sst2", lambda: from_sst2(1400)),
                      ("gsm8k", lambda: from_gsm8k(1600)),
                      ("xsum", from_xsum),
-                     ("mbpp", from_mbpp)):
+                     ("mbpp", from_mbpp),
+                     ("alpaca", from_alpaca)):
         try:
             got = fn()
             print(f"{name}: {len(got)}")
