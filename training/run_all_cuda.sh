@@ -4,13 +4,14 @@
 set -uo pipefail
 
 echo "== deps (CUDA Unsloth) =="
+[ -n "${HF_TOKEN:-}" ] && python -c "from huggingface_hub import login,os; login(os.environ['HF_TOKEN'])" 2>/dev/null && echo "HF authenticated"
 pip install -q "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git" 2>/dev/null || pip install -q unsloth
 pip install -q "transformers>=4.51" trl peft datasets accelerate sentencepiece gguf || exit 1
 
 echo "== base model =="
 BASE=$(python - <<'PY'
 from transformers import AutoConfig
-for c in ["Qwen/Qwen3.5-2B","Qwen/Qwen3-1.7B"]:
+for c in ["unsloth/Qwen2.5-3B-Instruct","unsloth/Llama-3.2-3B-Instruct","unsloth/Qwen2.5-1.5B-Instruct"]:
     try: AutoConfig.from_pretrained(c); print(c); break
     except Exception: pass
 PY
