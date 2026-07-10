@@ -256,6 +256,55 @@ def _call(client, task_id, category, model, system, prompt, max_tokens, attempt,
         return text
     return ""
 
+# -------------------------------------------------------------- local tier --
+
+
+_LOCAL_SPENT = {"s": 0.0}
+
+
+def _try_local(task_id, category, prompt, wall):
+    """Answer via the baked local model when every gate agrees; None escalates.
+    Gates: category eligibility, wall margin, a cumulative local-time budget
+    (a slow box can never starve the remote fallback), format validation,
+    label agreement across two samples (sentiment), and self-verification."""
+    from . import local_tier
+
+    if category not in local_tier.CATEGORIES:
+        return None
+    # Local generation is serialized and slow on the judge box: only start it
+    # while there is comfortably enough wall left for the remote fallback too.
+    if time.monotonic() > wall - 240:
+        return None
+    if _LOCAL_SPENT["s"] > float(os.environ.get("LOCAL_TIME_BUDGET", "300")):
+        return None
+    if not local_tier.available():
+        return None
+
+    system, _ = CONTRACTS[category]
+    cap = local_tier.CAPS[category]
+    t0 = time.monotonic()
+    answer = local_tier.generate(system, prompt, cap)
+    if not answer or validate(category, prompt, answer) is not None:
+        return None
+    if category == "sentiment":
+        # agreement gate: a second sample at a different temperature must
+        # land on the same label, or the task escalates
+        second = local_tier.generate(system, prompt, cap, temperature=0.6)
+        labels = []
+        for text in (answer, second):
+            found = [l for l in ("positive", "negative", "neutral") if l in text.lower()]
+            labels.append(found[0] if len(found) == 1 else None)
+        if labels[0] is None or labels[0] != labels[1]:
+            return None
+    if not local_tier.verify(prompt, answer):
+        _LOCAL_SPENT["s"] += time.monotonic() - t0
+        return None
+    dur = time.monotonic() - t0
+    _LOCAL_SPENT["s"] += dur
+    _record(task_id, category, "local", "ok", 0, None, "stop", dur * 1000)
+    return answer
+
+
 # ------------------------------------------------------------------- solve --
 
 
@@ -345,6 +394,7 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
     started = time.monotonic()
     wall = started + deadline_s
     LEDGER.clear()  # run-scoped audit trail
+    _LOCAL_SPENT["s"] = 0.0
 
     answers: dict[str, str] = {}
     tasks = _read(input_path, answers)
@@ -413,6 +463,16 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
                 category = _classify(Task(id=tid, input=prompt))
             except Exception:
                 category = "factual"
+            if os.environ.get("LOCAL", "0") == "1":
+                try:
+                    local = _try_local(tid, category, prompt, wall)
+                except Exception as exc:
+                    print(f"task {tid} local tier: {type(exc).__name__}", file=sys.stderr)
+                    local = None
+                if local is not None:
+                    answers[tid] = local
+                    _write(output_path, answers)
+                    return
             try:
                 answers[tid] = _solve_task(client, tid, prompt, category,
                                            chain_for(category), wall)
