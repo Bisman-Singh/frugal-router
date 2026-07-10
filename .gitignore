@@ -12,3 +12,4 @@ dist/
 
 # Internal strategy notes, never committed
 PLAYBOOK.md
+training/sft.jsonl

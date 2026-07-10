@@ -27,7 +27,8 @@ PY
 echo "base model: $BASE"
 
 echo "== phase 2: BIG dataset (~50k+; builder merges distill.jsonl + asserts >=20k) =="
-[ -f sft.jsonl ] || python build_dataset_big.py --out sft.jsonl --target 80000 || exit 1
+rm -f sft.jsonl   # ALWAYS rebuild the big set; never trust a committed/cached sft.jsonl
+python build_dataset_big.py --out sft.jsonl --target 80000 || exit 1
 echo "dataset lines: $(wc -l < sft.jsonl)"
 
 echo "== phase 3: full bf16 LoRA on the big AMD GPU (resume-safe) =="
