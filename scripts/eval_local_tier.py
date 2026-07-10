@@ -17,7 +17,8 @@ from run_eval2 import grade                           # noqa: E402
 
 tasks_path = sys.argv[2] if len(sys.argv) > 2 else "data/eval_gen.jsonl"
 tasks = [json.loads(l) for l in Path(tasks_path).read_text().splitlines()]
-tasks = [t for t in tasks if t["category"] in ("sentiment", "factual", "summarization", "ner")]
+from frugal_router import local_tier as _lt
+tasks = [t for t in tasks if t["category"] in _lt.CATEGORIES]
 limit = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 if limit:
     by = {}
