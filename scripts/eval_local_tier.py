@@ -15,7 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from frugal_router import simple                      # noqa: E402
 from run_eval2 import grade                           # noqa: E402
 
-tasks = [json.loads(l) for l in Path("data/eval_gen.jsonl").read_text().splitlines()]
+tasks_path = sys.argv[2] if len(sys.argv) > 2 else "data/eval_gen.jsonl"
+tasks = [json.loads(l) for l in Path(tasks_path).read_text().splitlines()]
 tasks = [t for t in tasks if t["category"] in ("sentiment", "factual", "summarization", "ner")]
 limit = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 if limit:

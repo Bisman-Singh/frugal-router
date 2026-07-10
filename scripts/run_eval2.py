@@ -240,6 +240,9 @@ def grade(task: dict, answer: str) -> bool:
         rivals = [low.rfind(o.lower()) for o in g.get("others", []) if o.lower() in low]
         return all(low.rfind(g["expected"].lower()) >= r for r in rivals) if rivals else True
 
+    if kind == "contains_any":
+        return any(k.lower() in low for k in g["expected"])
+
     if kind == "contains_all":
         ok = all(k.lower() in low for k in g["expected"])
         bad = any(k.lower() in low for k in g.get("must_not", []))
@@ -264,10 +267,13 @@ def grade(task: dict, answer: str) -> bool:
 
         def _limits():  # model-generated code is untrusted: cage it
             import resource
+            import sys as _sys
             resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
-            resource.setrlimit(resource.RLIMIT_AS, (512 << 20, 512 << 20))
-            resource.setrlimit(resource.RLIMIT_NOFILE, (16, 16))
             resource.setrlimit(resource.RLIMIT_FSIZE, (1 << 20, 1 << 20))
+            if _sys.platform != "darwin":
+                # an address-space cap kills the macOS interpreter at startup
+                resource.setrlimit(resource.RLIMIT_AS, (512 << 20, 512 << 20))
+                resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
 
         try:
             # -I: isolated mode (no site, no env hooks); env={}: no secrets;

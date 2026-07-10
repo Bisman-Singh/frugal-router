@@ -271,6 +271,15 @@ def _try_local(task_id, category, prompt, wall):
 
     if category not in local_tier.CATEGORIES:
         return None
+    # Factual splits into two populations: concept/definition explanations,
+    # which a small model answers reliably, and trivia lookups (who/when/
+    # where/which + names and dates), where it hallucinates confidently and
+    # self-approves. Measured on real trivia: half the kept answers were
+    # wrong. Only the explanation style stays local.
+    if category == "factual":
+        if re.search(r"(?i)\b(who|when|where|which|whom)\b", prompt) or \
+                not re.match(r"(?i)\s*(explain|describe|define|what is|what are|how do|how does|why)", prompt.strip()):
+            return None
     # Local generation is serialized and slow on the judge box: only start it
     # while there is comfortably enough wall left for the remote fallback too.
     if time.monotonic() > wall - 240:
