@@ -24,7 +24,9 @@ SYS = ("You rewrite task instructions. Rewrite the user's instruction in {k} "
        "output ONLY the {k} rewrites, one per numbered line.")
 
 _NUM = re.compile(r"-?\d+(?:\.\d+)?")
-_NAME = re.compile(r"\b[A-Z][a-z]{2,}\b")
+# mid-sentence capitalized tokens only: sentence-initial verbs ("Classify",
+# "Summarize") are instruction words a paraphrase may legitimately change.
+_MID_NAME = re.compile(r"(?<![.!?])(?<![.!?] )\s([A-Z][a-z]{2,})\b")
 _LINE = re.compile(r"^\s*\d+\s*[).:\-]\s*(.+?)\s*$")
 
 
@@ -35,11 +37,11 @@ def ok(orig: str, var: str) -> bool:
         return False
     if set(_NUM.findall(orig)) - set(_NUM.findall(var)):
         return False                       # every number must survive
-    names = set(_NAME.findall(orig))
+    names = set(_MID_NAME.findall(orig))
     if names:
         kept = sum(1 for n in names if n in var)
-        if kept < 0.8 * len(names):
-            return False                   # names mostly preserved
+        if kept < 0.7 * len(names):
+            return False                   # real proper names mostly preserved
     return True
 
 

@@ -18,13 +18,15 @@ PULL=$!
 echo "== P1: core dataset (judge formats, typed NER) =="
 $DOCK $PT bash -lc "pip install -q datasets sentencepiece huggingface_hub && python build_dataset_para.py --gens-per-cat 2500" || exit 1
 
+trap 'echo "=== PARA EXIT $? ==="' EXIT   # monitor catches success AND failure
+
 echo "== P2: paraphrase on the GPU =="
 if wait $PULL; then
   $DOCK $VL bash -lc "python paraphrase_vllm.py --k 3" || \
-  $DOCK $PT bash -lc "pip install -q accelerate sentencepiece && python paraphrase_vllm.py --k 3 --fallback" || exit 1
+  $DOCK $PT bash -lc "pip install -q transformers accelerate sentencepiece && python paraphrase_vllm.py --k 3 --fallback" || exit 1
 else
   echo "vLLM pull failed -> transformers fallback"
-  $DOCK $PT bash -lc "pip install -q accelerate sentencepiece && python paraphrase_vllm.py --k 3 --fallback" || exit 1
+  $DOCK $PT bash -lc "pip install -q transformers accelerate sentencepiece && python paraphrase_vllm.py --k 3 --fallback" || exit 1
 fi
 
 echo "== P3: assemble =="
