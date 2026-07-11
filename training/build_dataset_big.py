@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import re
 import sys
@@ -135,7 +136,9 @@ def main():
     if dp.exists():
         gold = [json.loads(l) for l in dp.read_text().splitlines() if l.strip()]
         data.extend(gold); print(f"distilled gold: {len(gold)}")
-    data.extend(abstention(rng, n=max(1500, int(len(data) * 0.12))))
+    _abf = float(os.environ.get("ABSTAIN_FRAC", "0.12"))  # retrain lever: cut over-abstention
+    data.extend(abstention(rng, n=max(600, int(len(data) * _abf))))
+    print(f"abstention fraction: {_abf:.0%}", flush=True)
     rng.shuffle(data)
     data = data[: args.target]
 
