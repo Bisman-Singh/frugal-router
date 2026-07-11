@@ -80,6 +80,71 @@ def gen_items(rng, n_per_cat):
     return examples, para
 
 
+_SURNAMES = ["Okafor", "Petrov", "Sandoval", "Meier", "Tanaka"]
+
+
+def ner_variety(rng, n, pid0):
+    """Variable-shape NER: subsets of types, duplicate types — the model must
+    list ONLY entities that are present, never hallucinate a missing date/org."""
+    from gen_eval import CITIES, FIRST, MONTHS, ORGS
+    ask = ("Extract the named entities (person, organization, location, date) "
+           "from this text, one per line as 'label: value': \"{s}\"")
+    examples, para = [], []
+    for i in range(n):
+        p1 = f"{rng.choice(FIRST)} {rng.choice(_SURNAMES)}"
+        p2 = f"{rng.choice(FIRST)} {rng.choice(_SURNAMES)}"
+        org, city = rng.choice(ORGS), rng.choice(CITIES)
+        date = f"{rng.choice(MONTHS)} {rng.randrange(1, 28)}, {rng.randrange(2018, 2026)}"
+        kind = i % 5
+        if kind == 0:      # person + org
+            sent = f"{p1} joined {org} as chief architect."
+            ents = [("person", p1), ("organization", org)]
+        elif kind == 1:    # org + location
+            sent = f"The {org} office in {city} expanded to two new floors."
+            ents = [("organization", org), ("location", city)]
+        elif kind == 2:    # person + location + date
+            sent = f"{p1} delivered the keynote in {city} on {date}."
+            ents = [("person", p1), ("location", city), ("date", date)]
+        elif kind == 3:    # TWO persons + org
+            if p2 == p1:
+                p2 = f"{rng.choice(FIRST)} {rng.choice(_SURNAMES[1:])}"
+            sent = f"{p1} and {p2} co-founded {org} together."
+            ents = [("person", p1), ("person", p2), ("organization", org)]
+        else:              # org + date
+            sent = f"{org} reported quarterly earnings on {date}."
+            ents = [("organization", org), ("date", date)]
+        prompt = ask.format(s=sent)
+        target = "\n".join(f"{k}: {v}" for k, v in ents)
+        examples.append(_example("ner", prompt, target))
+        instruction, payload = _split(prompt)
+        para.append({"pid": pid0 + i, "category": "ner", "instruction": instruction,
+                     "payload": payload, "target": target})
+    return examples, para
+
+
+def code_items():
+    """Official-guide-style code specs WITH reference solutions, plus debug
+    variants whose bug descriptions are SPECIFIC (from the known mutation)."""
+    from gen_eval import _BUGS, _CODE_SPECS
+    ex = []
+    for _name, spec, ref, _tests in _CODE_SPECS:
+        ex.append(_example("code_gen", spec, f"```python\n{ref}\n```"))
+    for i in range(len(_CODE_SPECS) * len(_BUGS)):
+        _name, _spec, ref, _tests = _CODE_SPECS[i % len(_CODE_SPECS)]
+        good, bad = _BUGS[i % len(_BUGS)]
+        if good not in ref:
+            continue
+        broken = ref.replace(good, bad, 1)
+        if broken == ref:
+            continue
+        ex.append(_example(
+            "code_debug",
+            "This Python function has a bug. Identify it and give the complete "
+            f"corrected function:\n```python\n{broken}\n```",
+            f"The bug: `{bad}` should be `{good}`.\n```python\n{ref}\n```"))
+    return ex
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gens-per-cat", type=int, default=2500)
@@ -90,6 +155,15 @@ def main():
 
     examples, para = gen_items(rng, args.gens_per_cat)
     print(f"generators: {len(examples)} (ner typed, scaffolds rotated)", flush=True)
+
+    nv_ex, nv_para = ner_variety(rng, max(1200, args.gens_per_cat // 2), len(para))
+    examples.extend(nv_ex)
+    para.extend(nv_para)
+    print(f"ner variety: {len(nv_ex)} (variable entity shapes)", flush=True)
+
+    ci = code_items()
+    examples.extend(ci)
+    print(f"guide-style code specs: {len(ci)} (specific bug descriptions)", flush=True)
 
     for name, fn in (("sst2", lambda: sst2(6000)), ("gsm8k", lambda: gsm8k(6000)),
                      ("xsum", lambda: xsum(6000)), ("alpaca", lambda: alpaca(6000)),

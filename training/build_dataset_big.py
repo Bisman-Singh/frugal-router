@@ -70,8 +70,17 @@ def xsum(n):
         doc, summ = " ".join(r["document"].split()), r["summary"].strip()
         if len(doc.split()) < 60 or len(summ.split()) < 6:
             continue
+        head = " ".join(doc.split()[:220])
+        # grounding filter: never teach summarizing facts the shown text lacks
+        content = [w for w in re.findall(r"[a-z']+", summ.lower()) if len(w) > 3]
+        if content and sum(1 for w in content if w in head.lower()) < 0.6 * len(content):
+            continue
+        # rotate constraint phrasings the reference genuinely satisfies
+        opts = ["in one sentence", "in a single concise sentence",
+                f"in no more than {len(summ.split()) + 8} words",
+                "in at most two sentences"]
         out.append(_example("summarization",
-            f"Summarize the following text in one sentence: {' '.join(doc.split()[:220])}", summ))
+            f"Summarize the following text {opts[len(out) % len(opts)]}: {head}", summ))
         if len(out) >= n:
             break
     return out
@@ -103,14 +112,16 @@ def mbpp(n_gen, n_dbg):
         if len(gen) < n_gen:
             gen.append(_example("code_gen", f"{text} Write it as a Python function named {m.group(1)}.", fenced))
         elif len(dbg) < n_dbg:
-            broken = code
+            broken, desc = code, ""
             for a, b in _MUT:
                 if a in broken:
-                    broken = broken.replace(a, b, 1); break
+                    broken = broken.replace(a, b, 1)
+                    desc = f"The bug: `{b}` should be `{a}`."  # SPECIFIC, never canned
+                    break
             if broken != code:
                 dbg.append(_example("code_debug",
                     f"This Python function has a bug. Identify it and give the complete corrected function:\n```python\n{broken}\n```",
-                    f"The bug is an incorrect operator or boundary in the logic.\n{fenced}"))
+                    f"{desc}\n{fenced}"))
         if len(gen) >= n_gen and len(dbg) >= n_dbg:
             break
     return gen + dbg
