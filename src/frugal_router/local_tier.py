@@ -25,7 +25,12 @@ _DISABLED = False
 _SUFFIX = os.environ.get("LOCAL_SUFFIX", "")  # e.g. "/no_think" for hybrid-thinking models
 _THINK_RE = re.compile(r"(?s)<(?:think|thought)>.*?(?:</(?:think|thought)>|\Z)\s*")
 
-# max new tokens per category: answers here are short by construction
+# max new tokens per category: answers here are short by construction.
+# code_gen/math are intentionally NOT here: ast.parse is a syntax check, not a
+# correctness check ("valid but wrong" sails through), and code/math are
+# execution-graded. They stay remote until an EXECUTION gate (run generated code
+# against extracted/inferred tests) proves per-category local accuracy on the
+# dev set above threshold+margin. Data decides, not the architecture diagram.
 CAPS = {"sentiment": 40, "factual": 100, "summarization": 70, "ner": 90, "logic": 80}
 CATEGORIES = frozenset(CAPS)
 

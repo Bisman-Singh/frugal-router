@@ -144,7 +144,7 @@ def test_length_finish_reason_retries_with_bigger_budget(env):
 def test_total_outage_is_bounded_and_blank_preserved(env):
     _Mock.script = staticmethod(lambda body: (500, None, None))
     results, outp = env([{"task_id": "x1", "prompt": "Explain gravity."}])
-    assert results["x1"] == ""            # honest blank, exit 0, schema valid
+    assert results["x1"] == "Unknown."    # never blank: best-guess default on total outage
     # chain = [minimax, kimi, gemma-31b] + corrective slot; SDK retries once
     # per request, so the logical-attempt bound is 4 (<=8 wire calls).
     assert len(_Mock.calls) <= 8
@@ -271,5 +271,5 @@ def test_all_non_chat_models_fail_closed(env, tmp_path, monkeypatch):
         results, _ = env([{"task_id": "q1", "prompt": "Explain gravity."}])
     finally:
         _os.environ["ALLOWED_MODELS"] = ALLOWED
-    assert results["q1"] == ""          # preserved blank, not a doomed call
-    assert len(_Mock.calls) == 0        # zero requests to non-chat models
+    assert results["q1"] == "Unknown."  # never blank: best-guess default (still never CALLS a non-chat model)
+    assert len(_Mock.calls) == 0        # zero requests to non-chat models (fail-closed preserved)

@@ -16,7 +16,9 @@ python -c "import peft,trl,datasets,accelerate" 2>/dev/null || \
 command -v cmake >/dev/null 2>&1 || pip install -q cmake ninja   # llama.cpp quantize needs cmake
 [ -n "${HF_TOKEN:-}" ] && python -c "import os;from huggingface_hub import login;login(token=os.environ['HF_TOKEN'])" 2>/dev/null && echo "HF authenticated"
 
-echo "== phase 1: pick the strongest 3B base that loads (Q4 fits the 4GB judge) =="
+echo "== phase 1: pick base (BASE_MODEL override, else strongest 3B that loads) =="
+BASE="${BASE_MODEL:-}"
+if [ -z "$BASE" ]; then
 BASE=$(python - <<'PY'
 from transformers import AutoConfig
 for c in ["Qwen/Qwen2.5-3B-Instruct","unsloth/Qwen2.5-3B-Instruct","Qwen/Qwen2.5-1.5B-Instruct"]:
@@ -24,6 +26,7 @@ for c in ["Qwen/Qwen2.5-3B-Instruct","unsloth/Qwen2.5-3B-Instruct","Qwen/Qwen2.5
     except Exception: pass
 PY
 )
+fi
 [ -z "$BASE" ] && { echo "no base model reachable"; exit 1; }
 echo "base model: $BASE"
 
