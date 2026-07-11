@@ -145,6 +145,52 @@ def code_items():
     return ex
 
 
+_SST2_FRAMES = [
+    'Classify the sentiment of this review fragment and justify briefly: {q}',
+    'What is the sentiment of this text? Give the label plus a short reason: {q}',
+    'Read this review excerpt and state whether it is positive, negative, or neutral, with a brief justification: {q}',
+    'Determine the emotional tone of this snippet and explain in one line: {q}',
+    'Label the sentiment (positive, negative, or neutral) of {q} and briefly say why.',
+    'How does this reviewer feel? Answer with a sentiment label and one short sentence: {q}',
+    'Is the following opinion positive, negative, or neutral? Add a one-sentence justification: {q}',
+]
+_SUMM_LEADS = ["Summarize the following text", "Condense the passage below",
+               "Provide a summary of the text that follows", "Boil this text down"]
+_MBPP_TAILS = [" Write it as a Python function named {n}.",
+               " Implement this as a Python function called {n}.",
+               " Provide a Python function {n} that does this.",
+               " Your answer should be a single Python function named {n}."]
+_SST2_PREFIX = "Classify the sentiment of this review fragment and justify briefly: "
+_SUMM_RE = re.compile(r"^Summarize the following text (in [^:]+|[^:]{3,40}): ", re.S)
+_MBPP_RE = re.compile(r" Write it as a Python function named (\w+)\.$")
+
+
+def vary_benchmark_frames(examples, rng):
+    """Break residual instruction-template concentrations in benchmark items
+    (6k identical sst2 frames etc.) — same overfit shape as the audit guns."""
+    hits = 0
+    for ex in examples:
+        p = ex["messages"][1]["content"]
+        if p.startswith(_SST2_PREFIX):
+            ex["messages"][1]["content"] = rng.choice(_SST2_FRAMES).format(
+                q=p[len(_SST2_PREFIX):])
+            hits += 1
+            continue
+        m = _SUMM_RE.match(p)
+        if m and p.startswith("Summarize the following text "):
+            ex["messages"][1]["content"] = (
+                f"{rng.choice(_SUMM_LEADS)} {m.group(1)}: {p[m.end():]}")
+            hits += 1
+            continue
+        m = _MBPP_RE.search(p)
+        if m:
+            ex["messages"][1]["content"] = (
+                p[: m.start()] + rng.choice(_MBPP_TAILS).format(n=m.group(1)))
+            hits += 1
+    print(f"benchmark frames varied: {hits}", flush=True)
+    return examples
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--gens-per-cat", type=int, default=2500)
@@ -175,6 +221,7 @@ def main():
         except Exception as e:
             print(f"{name}: FAILED ({type(e).__name__}: {e})", flush=True)
 
+    examples = vary_benchmark_frames(examples, rng)
     with open(args.core, "w", encoding="utf-8") as f:
         for ex in examples:
             f.write(json.dumps(ex, ensure_ascii=False) + "\n")
