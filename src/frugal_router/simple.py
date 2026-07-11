@@ -472,6 +472,41 @@ def _solve_local_only(task_id, category, prompt, wall):
     return ""
 
 
+_BATCHABLE = ("sentiment", "ner", "logic", "factual", "math")
+_ITEM_HDR = re.compile(r"(?im)^\s*#{0,3}\s*ITEM\s+(\d+)\s*[:.)\-]?\s*")
+
+
+def _solve_batch(client, items, category, model, wall):
+    """One grouped remote call for same-category SHORT-prompt tasks: numbered
+    items in, '### ITEM n'-delimited answers out. Each block is validated
+    individually; anything missing or invalid falls back to the solo path.
+    Amortizes the per-call system/framing overhead across items."""
+    system, _ = _contract(category)
+    n = len(items)
+    sys_b = (system + f" You will receive {n} numbered items. Answer EVERY item. "
+             "Start each answer with '### ITEM <number>' on its own line, then "
+             "give the answer in the required format.")
+    user = "\n\n".join(f"### ITEM {i + 1}\n{p}" for i, (_t, p) in enumerate(items))
+    cap = min(120 * n + 100, 1800)
+    out: dict[str, str] = {}
+    text = _call(client, f"batch-{category}", category, model, sys_b, user, cap, 0)
+    if not text:
+        return out
+    blocks = _ITEM_HDR.split(text)
+    # split-with-capture: [pre, '1', block1, '2', block2, ...]
+    for j in range(1, len(blocks) - 1, 2):
+        try:
+            idx = int(blocks[j]) - 1
+        except ValueError:
+            continue
+        if 0 <= idx < n:
+            tid, prompt = items[idx]
+            ans = blocks[j + 1].strip()
+            if ans and validate(category, prompt, ans) is None:
+                out[tid] = ans
+    return out
+
+
 def _best_guess(prompt: str) -> str:
     """Absolute last resort when no tier produced anything: a formatted,
     non-empty default. For classification categories the majority label carries
@@ -629,6 +664,34 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
                 if m and m not in deduped:
                     deduped.append(m)
             return deduped
+
+        # Grouped calls first (BATCH=1): short-prompt categories share one call
+        # per ~8 items; validated hits are kept, the rest fall to the solo pool.
+        if os.environ.get("BATCH", "0") == "1":
+            groups: dict[str, list] = {}
+            for tid, prompt in tasks:
+                try:
+                    c = _classify(Task(id=tid, input=prompt))
+                except Exception:
+                    c = "factual"
+                if c in _BATCHABLE:
+                    groups.setdefault(c, []).append((tid, prompt))
+            for c, items in groups.items():
+                if len(items) < 2:
+                    continue
+                for s in range(0, len(items), 8):
+                    if time.monotonic() > wall - 90:
+                        break
+                    chunk = items[s:s + 8]
+                    try:
+                        got = _solve_batch(client, chunk, c, chain_for(c)[0], wall)
+                    except Exception as exc:
+                        print(f"batch {c}: {type(exc).__name__}", file=sys.stderr)
+                        got = {}
+                    answers.update(got)
+                    if got:
+                        _write(output_path, answers)
+            tasks = [(tid, p) for tid, p in tasks if not answers.get(tid)]
 
         def work(task):
             tid, prompt = task
