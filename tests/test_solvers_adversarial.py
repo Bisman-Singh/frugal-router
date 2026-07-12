@@ -21,6 +21,18 @@ DEFER_CASES = [
     "Priya finished before Quinn but after Ravi in one heat and after Quinn in another. Who won overall?",
     # percent-of with a follow-up twist the solver cannot see
     "What is 15% of 240, minus the number of days in February 2024?",
+    # assignment CSP traps: under-constrained, so no unique proof
+    ("Sam, Jo, and Lee each own a different pet: cat, dog, bird. "
+     "Sam does not own the bird. Who owns the cat?"),
+    # a clue relating two entities is not a pairwise pin -> unparsed -> defer
+    ("Ana, Ben, and Cara each chose a different color: red, blue, green. "
+     "Ana chose a brighter color than Ben. Ben chose red. Who chose green?"),
+    # no bijection signal ("different" absent): setup unproven
+    ("Sam, Jo, and Lee own a cat, a dog, and a bird. Jo owns the dog. "
+     "Who owns the cat?"),
+    # contradictory clues -> zero solutions -> defer
+    ("Sam, Jo, and Lee each own a different pet: cat, dog, bird. "
+     "Sam owns the dog. Jo owns the dog. Who owns the cat?"),
 ]
 
 EXACT_CASES = [
