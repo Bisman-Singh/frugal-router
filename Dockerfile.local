@@ -20,8 +20,9 @@ RUN grep -v "^frugal-router" v29-freeze.txt > /tmp/pins.txt && \
 # NER tier talks to it over a subprocess. Verbatim-span verification in the
 # app makes even a drifted spaCy unable to emit an unverifiable answer.
 RUN python -m venv /opt/spacyenv && \
-    /opt/spacyenv/bin/pip install --no-cache-dir spacy && \
-    /opt/spacyenv/bin/python -m spacy download en_core_web_md
+    /opt/spacyenv/bin/pip install --no-cache-dir --only-binary=:all: "spacy==3.8.14" click && \
+    /opt/spacyenv/bin/pip install --no-cache-dir \
+      https://github.com/explosion/spacy-models/releases/download/en_core_web_md-3.8.0/en_core_web_md-3.8.0-py3-none-any.whl
 ENV SPACY_PY=/opt/spacyenv/bin/python \
     SPACY_SCRIPT=/app/scripts/spacy_ner.py
 
