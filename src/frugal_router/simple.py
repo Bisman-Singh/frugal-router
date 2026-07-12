@@ -369,6 +369,31 @@ def _try_code_exec(task_id, prompt, wall):
     return None
 
 
+def _try_code_debug(task_id, prompt, wall):
+    """code_debug at 0 tokens ONLY when the buggy snippet reproducibly fails a
+    prompt-extracted example and a local fix, prompted with that OBSERVED
+    failure, passes every example. Otherwise defer to remote unchanged."""
+    from . import code_debug, local_tier
+    if not local_tier.available() or time.monotonic() > wall - 240:
+        return None
+    if _LOCAL_SPENT["s"] > float(os.environ.get("LOCAL_TIME_BUDGET", "300")):
+        return None
+    t0 = time.monotonic()
+    try:
+        answer = code_debug.verify_code_debug(
+            prompt, local_tier.generate,
+            cap=int(os.environ.get("BUDGET_CODE", "400")))
+    except Exception:
+        answer = None
+    finally:
+        _LOCAL_SPENT["s"] += time.monotonic() - t0
+    if answer and validate("code_debug", prompt, answer) is None:
+        _record(task_id, "code_debug", "local-exec", "ok", 0, None, "stop",
+                (time.monotonic() - t0) * 1000)
+        return answer
+    return None
+
+
 def _try_local(task_id, category, prompt, wall):
     """Answer via the baked local model when every gate agrees; None escalates.
     Gates: category eligibility, wall margin, a cumulative local-time budget
@@ -389,6 +414,8 @@ def _try_local(task_id, category, prompt, wall):
         return _try_math_pot(task_id, prompt, wall)
     if category == "code_gen":
         return _try_code_exec(task_id, prompt, wall)
+    if category == "code_debug":
+        return _try_code_debug(task_id, prompt, wall)
 
     if category not in local_tier.CATEGORIES:
         return None
@@ -694,8 +721,10 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
             handled = 0
             for tid, prompt in sorted(tasks, key=lambda t: cheap_first.get(cats[t[0]], 9)):
                 # math rides the pre-pass too (program-of-thought, executed +
-                # agreement-gated); spaCy ner is cheapest of all (no LLM).
-                if cats[tid] not in local_tier.CATEGORIES and cats[tid] not in ("math", "code_gen"):
+                # agreement-gated); code_gen/code_debug are execution-verified;
+                # spaCy ner is cheapest of all (no LLM).
+                if cats[tid] not in local_tier.CATEGORIES and \
+                        cats[tid] not in ("math", "code_gen", "code_debug"):
                     continue
                 try:
                     local = _try_local(tid, cats[tid], prompt, wall)
