@@ -208,4 +208,42 @@ No new runtime dependency (dev-only script). Green.
 - Evidence: full suite **173 passed**, 0 skips. Import check: new modules are
   stdlib-only (onv29-layerable, no cold-start cost).
 
-<!-- Gap D: ... -->
+### Gap D — Archetype-variant eval — DONE
+
+- New `scripts/gen_variants.py`: seeded generator for randomized variants of
+  the 8 public task archetypes (math families, assignment-CSP + ordering logic,
+  code_gen/code_debug with worked examples, sentiment/ner/summarization/
+  factual). Ground truth is computed INDEPENDENTLY of the solvers (CSP puzzles
+  built from a fixed random assignment, uniqueness enforced by adding positive
+  pins), so it measures the code, not itself. `--per 12` → 96 labeled tasks.
+- New `scripts/eval_variants.py`: runs the zero-token deterministic tiers
+  (`solvers.solve_any`) over a variant file and prints a per-category
+  coverage/accuracy table; flags model-tier categories (no deterministic path)
+  and lists any solver miss (must be empty — a wrong zero-token answer costs
+  the gate). Dev-only, stdlib + solvers; runs with no model/network.
+- Measured (seed 7, and reproduced on seed 42):
+  ```
+  category          total  answered  correct   cover%    acc%
+  logic                12        12       12     100%    100%
+  math                 12        12       12     100%    100%
+  (code_*/ner/sentiment/summarization/factual: 0% — model tier)
+  DETERMINISTIC (math+logic): 24/24 answered (100% coverage), 24/24 correct
+  ```
+  So the deterministic layer alone carries ~25% of tasks (math+logic) at zero
+  tokens with zero wrong answers under randomization. Model-backed lanes are
+  measured with the baked GGUF via the image smoke (needs a box with the model
+  + llama-cpp), out of scope for this model-less environment.
+- Tests: `tests/test_variants.py` (5): generator determinism under seed,
+  re-randomization on a new seed, shape (≥80 tasks, all 8 categories, grader
+  types), the **safety test** (every math/logic solver hit matches the label
+  across seeds 1/7/42/99 — prove-or-defer correctness under randomization),
+  and full math+logic coverage at the default seed.
+- Evidence: full suite **178 passed**, 0 skips. Committed `data/variants.jsonl`
+  (seed 7) as a reference sample.
+
+## Summary
+
+All four gaps landed on `feat/zero-gaps` (off `origin/main`), full suite
+**178 passed** (141 baseline + 37 new), every new module stdlib-only and
+onv29-layerable, no new runtime dependency, no stored answers. Ready for
+reviewer verification (checklist above).
