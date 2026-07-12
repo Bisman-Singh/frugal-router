@@ -23,6 +23,28 @@ _EXAMPLE = re.compile(
     r"([^\n.,;]+?)\s*(?:[\n.,;]|(?=\s+and\s)|$)")
 
 
+def _is_literal_call(call: str) -> bool:
+    """True when every argument is a literal — 'f(5)', "f('a b')" — and not
+    the signature echo 'f(n)' that prose like 'f(n) returns n!' produces."""
+    try:
+        node = ast.parse(call, mode="eval").body
+        if not isinstance(node, ast.Call) or node.keywords:
+            return False
+        for arg in node.args:
+            ast.literal_eval(arg)
+        return True
+    except (SyntaxError, ValueError):
+        return False
+
+
+def _is_literal_expected(exp: str) -> bool:
+    try:
+        ast.literal_eval(exp)
+        return True
+    except (SyntaxError, ValueError):
+        return False
+
+
 def extract_tests(prompt: str, func: str | None) -> list[tuple[str, str]]:
     tests = []
     for call, expected in _EXAMPLE.findall(prompt):
@@ -31,6 +53,16 @@ def extract_tests(prompt: str, func: str | None) -> list[tuple[str, str]]:
         exp = expected.strip().strip("`'\" ")
         if not exp:
             continue
+        # Only literal in / literal out qualifies as a checkable example;
+        # anything else is prose describing the signature, not a test.
+        if not _is_literal_call(call.strip()):
+            continue
+        if not _is_literal_expected(exp):
+            exp_q = repr(exp)
+            if _is_literal_expected(exp_q):   # bare-word result -> string
+                exp = exp_q
+            else:
+                continue
         tests.append((call.strip(), exp))
     return tests[:6]
 

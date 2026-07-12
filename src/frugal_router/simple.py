@@ -595,6 +595,19 @@ def _solve_local_only(task_id, category, prompt, wall):
             plan.append((system + _FORCE_SUFFIX, prompt, 0.0))
             plan.append((system + _FORCE_SUFFIX, prompt, 0.6))
     for c in candidates:  # best committed attempt, validated or not
+        if len(c.split()) >= 4 or category not in ("summarization", "factual"):
+            if c.strip():
+                _record(task_id, category, "local", "forced", 99, None, "stop", 0)
+                return c
+    # Junk rescue: a summarization answer that collapsed to near-nothing
+    # ('Unknown.') is strictly worse than the lede of the source text.
+    if category == "summarization":
+        from . import text_local
+        lead = text_local.summarize_lead(prompt)
+        if lead:
+            _record(task_id, category, "local-lede", "rescue", 99, None, "stop", 0)
+            return lead
+    for c in candidates:
         if c.strip():
             _record(task_id, category, "local", "forced", 99, None, "stop", 0)
             return c

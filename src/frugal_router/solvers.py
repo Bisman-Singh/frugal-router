@@ -95,6 +95,13 @@ def solve_any(prompt: str) -> tuple[str, str] | None:
     answer = facts.lookup(prompt)
     if answer is not None:
         return answer, "factual"
+    from . import text_local
+    answer = text_local.sentiment(prompt)
+    if answer is not None:
+        return answer, "sentiment"
+    # summarize_lead is deliberately NOT here: a lede cannot be proven
+    # against unseen keyword graders, so it serves only as the junk-rescue
+    # inside the local lane, never as an override of the model.
     return None
 
 
