@@ -170,4 +170,22 @@ No new runtime dependency (dev-only script). Green.
   `python -c "import frugal_router.sandbox, .code_verify, .simple"` → OK, no
   new runtime dependency (stdlib only; onv29-layerable).
 
-<!-- Gap B: ... -->
+### Gap B — CSP brute-force logic solver — DONE
+
+- New `_assignment_csp` in `solvers.py`, added to `_LOGIC_SOLVERS`. Parses the
+  bijective-assignment archetype ("N names each ... a different <noun>: v1, v2,
+  v3", then pairwise pin/forbid clues, then a who/which question), enumerates
+  the ≤ 5! permutations, and answers ONLY when exactly one assignment survives
+  every clue AND every clue sentence parsed cleanly. Stdlib `itertools` only.
+- prove-or-defer guards: requires the word "different" (bijection signal);
+  defers on 2-name relational clues (unparsed), missing bijection signal,
+  > 5 entities, multiple solutions, contradictions, name/value token overlap,
+  or a second question.
+- Fully parametric — no stored answers (grep audit: the only `return "yes"` is
+  the pre-existing `_syllogism`, a computed conclusion).
+- Tests: `tests/test_csp.py` (9): canonical pet puzzle + 3 randomized variants
+  (names/values/order changed, "who" and "which" question forms, 4 entities) +
+  5 defer cases. Extended `test_solvers_adversarial.py` with 4 CSP traps.
+- Evidence: solver suites 27 passed; full suite **164 passed**, 0 skips.
+
+<!-- Gap C: ... -->
