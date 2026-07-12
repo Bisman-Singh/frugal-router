@@ -188,4 +188,24 @@ No new runtime dependency (dev-only script). Green.
   5 defer cases. Extended `test_solvers_adversarial.py` with 4 CSP traps.
 - Evidence: solver suites 27 passed; full suite **164 passed**, 0 skips.
 
-<!-- Gap C: ... -->
+### Gap C — Execution-grounded code_debug lane — DONE
+
+- New `src/frugal_router/code_debug.py`: `verify_code_debug()` extracts the
+  buggy fenced snippet + prompt examples (reusing `code_verify`), runs the
+  snippet in the hardened sandbox to OBSERVE the real failure (raised
+  exception / wrong return / parse error via `observe_failure` + `_probe`),
+  prompts the model WITH that evidence, and keeps the fix only when it parses
+  and passes every example (`code_verify._run`). Emits "Bug: <observed>.\n```
+  python\n<fix>\n```". No evidence / no snippet / unreproducible / still-failing
+  fix → None (defer). Stdlib-only.
+- Wired into `simple.py`: `_try_code_debug` (same wall-margin / LOCAL_TIME_BUDGET
+  guards as `_try_code_exec`), dispatched from `_try_local` for `code_debug`,
+  and `code_debug` added to the pre-pass eligibility set.
+- Tests: `tests/test_code_debug.py` (9): observe wrong-return / exception /
+  syntax-error / correct-code-None; verify grounds the prompt with the observed
+  failure and accepts a passing fix; rejects a still-failing fix; defers with no
+  example (never calls the model) and with no snippet; `_try_local` wiring.
+- Evidence: full suite **173 passed**, 0 skips. Import check: new modules are
+  stdlib-only (onv29-layerable, no cold-start cost).
+
+<!-- Gap D: ... -->
