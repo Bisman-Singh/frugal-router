@@ -13,6 +13,7 @@ hardcoded answer; every result is computed from the prompt at run time.
 from __future__ import annotations
 
 import ast
+import math
 import operator
 import re
 
@@ -71,6 +72,9 @@ def solve(prompt: str, category: str) -> str | None:
         return _first_hit(prompt, _MATH_SOLVERS)
     if category == "logic":
         return _first_hit(prompt, _LOGIC_SOLVERS)
+    if category == "factual":
+        from . import facts
+        return facts.lookup(prompt)
     return None
 
 
@@ -87,6 +91,10 @@ def solve_any(prompt: str) -> tuple[str, str] | None:
     answer = _first_hit(prompt, _LOGIC_SOLVERS)
     if answer is not None:
         return answer, "logic"
+    from . import facts
+    answer = facts.lookup(prompt)
+    if answer is not None:
+        return answer, "factual"
     return None
 
 
@@ -477,7 +485,68 @@ def _triangle(prompt: str) -> str | None:
     return _format_number(0.5 * float(m.group(1)) * float(m.group(2)))
 
 
+_EARN = re.compile(
+    rf"(?i)\b(?:earns?|paid|makes?|charges?)\s+\$?({_NUM})\s*(?:dollars?\s*)?"
+    rf"(?:per|an?|each|/)\s*hour\b.*?\b({_NUM})\s*hours?\b", re.S)
+
+
+def _earnings(prompt: str) -> str | None:
+    """'earns $28 per hour and works 6 hours' -> wage x hours."""
+    m = _EARN.search(prompt)
+    if not m or len(re.findall(_NUM, prompt)) != 2:
+        return None
+    return _format_number(float(m.group(1)) * float(m.group(2)))
+
+
+_DICE_SUM = re.compile(rf"(?i)\bsum\s+(?:of\s+|is\s+|equals?\s+)?({_NUM})\b")
+
+
+def _dice_sum(prompt: str) -> str | None:
+    """Probability that two fair six-sided dice sum to N."""
+    if not re.search(r"(?i)\b(?:two|2|pair of)\b.*?\bdice\b", prompt, re.S):
+        return None
+    if not re.search(r"(?i)\b(probability|chance|likelihood|odds)\b", prompt):
+        return None
+    m = _DICE_SUM.search(prompt)
+    if not m:
+        return None
+    target = float(m.group(1))
+    if not target.is_integer():
+        return None
+    ways = sum(1 for a in range(1, 7) for b in range(1, 7) if a + b == int(target))
+    if ways == 0:
+        return "0"
+    g = math.gcd(ways, 36)
+    return f"{ways}/36 = {ways // g}/{36 // g} (about {ways / 36:.4f})"
+
+
+def _single_die(prompt: str) -> str | None:
+    """Probability of one specific face on a fair six-sided die."""
+    if not re.search(r"(?i)\b(?:a|one|single|fair)\s+(?:six-sided\s+|6-sided\s+)?(?:die|dice)\b", prompt):
+        return None
+    if re.search(r"(?i)\btwo\b|\bpair\b|\bboth\b", prompt):
+        return None
+    if not re.search(r"(?i)\b(probability|chance|likelihood|odds)\b", prompt):
+        return None
+    if not re.search(r"(?i)\brolling\s+(?:a\s+|an\s+)?[1-6]\b", prompt):
+        return None
+    return "1/6 (about 0.1667)"
+
+
 _MATH_SOLVERS = (_percent_of, _discount, _percent_increase, _stacked_discount,
                  _compound_interest, _simple_interest, _average, _fraction_of,
-                 _circle, _triangle, _rate_time, _speed, _rectangle, _arithmetic)
-_LOGIC_SOLVERS = (_syllogism, _ordering)
+                 _circle, _triangle, _rate_time, _speed, _rectangle, _earnings,
+                 _dice_sum, _single_die, _arithmetic)
+
+
+def _syllogism_validity(prompt: str) -> str | None:
+    from . import logic_search
+    return logic_search.syllogism_validity(prompt)
+
+
+def _ordering_search(prompt: str) -> str | None:
+    from . import logic_search
+    return logic_search.ordering_search(prompt)
+
+
+_LOGIC_SOLVERS = (_syllogism, _ordering, _syllogism_validity, _ordering_search)

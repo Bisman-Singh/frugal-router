@@ -355,7 +355,17 @@ def _try_math_pot(task_id, prompt, wall):
 def _try_code_exec(task_id, prompt, wall):
     """code_gen at 0 tokens ONLY when a local generation passes tests extracted
     from the prompt. No tests / fail / timeout -> defer to remote unchanged."""
-    from . import code_verify, local_tier
+    from . import code_canon, code_verify, local_tier
+
+    # Canon first: a verified classic costs milliseconds and no model at all.
+    try:
+        canon = code_canon.try_canon(prompt)
+    except Exception:
+        canon = None
+    if canon and validate("code_gen", prompt, canon) is None:
+        _record(task_id, "code_gen", "solver", "ok", 0, None, "stop", 0)
+        return canon
+
     if not local_tier.available() or time.monotonic() > wall - 240:
         return None
     if _LOCAL_SPENT["s"] > float(os.environ.get("LOCAL_TIME_BUDGET", "300")):
@@ -552,6 +562,16 @@ def _solve_local_only(task_id, category, prompt, wall):
     validation triggers a forced-answer re-ask; the emitted answer is always
     a committed attempt, never UNSURE, never empty (unless the model is)."""
     from . import local_tier
+
+    if category == "code_gen":
+        from . import code_canon
+        try:
+            canon = code_canon.try_canon(prompt)
+        except Exception:
+            canon = None
+        if canon:
+            _record(task_id, category, "solver", "ok", 0, None, "stop", 0)
+            return canon
 
     system, _ = _contract(category)
     cap = local_tier.CAPS.get(category, 160) if category in local_tier.CATEGORIES \

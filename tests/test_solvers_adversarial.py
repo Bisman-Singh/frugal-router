@@ -15,7 +15,6 @@ DEFER_CASES = [
     # multiple quantities where the target is unclear
     "A shop sells pens at $3 and pencils at $2. Tom buys 7 items. How much?",
     # negation flips
-    "All bloops are NOT razzies. Some razzies are lazzies. Must all bloops be lazzies?",
     "Alice is not taller than Bob. Bob is not taller than Carol. Who is tallest?",
     # ordering with an unconsumed relation
     "Priya finished before Quinn but after Ravi in one heat and after Quinn in another. Who won overall?",
@@ -46,3 +45,17 @@ def test_known_hits_stay_exact():
         hit = solve_any(prompt)
         assert hit is not None, f"expected a solver hit for {prompt!r}"
         assert hit[0] == expected
+
+
+def test_negated_all_proven_across_readings():
+    # 'All X are NOT Y' is ambiguous ('no X are Y' vs 'some X are not Y').
+    # The model checker answers only because BOTH readings yield the same
+    # verdict by exhaustive enumeration: a counterexample world (a bloop that
+    # is neither razzie nor lazzie) exists under either parse, so 'not
+    # necessarily' is proven, not guessed. Formerly a defer case, moved here
+    # when the finite-model checker replaced pattern-only syllogisms.
+    hit = solve_any(
+        "All bloops are NOT razzies. Some razzies are lazzies. "
+        "Must all bloops be lazzies?")
+    assert hit is not None and hit[1] == "logic"
+    assert hit[0].lower().startswith("no")

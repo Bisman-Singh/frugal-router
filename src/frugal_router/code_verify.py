@@ -20,7 +20,7 @@ _FUNC = re.compile(r"(?i)function\s+(?:named\s+|called\s+)?`?([A-Za-z_]\w*)`?")
 _EXAMPLE = re.compile(
     r"(?im)(?:>>>\s*)?([A-Za-z_]\w*\([^()]*\))\s*"
     r"(?:should\s+return|returns?|->|==|gives?|yields?|=)\s*"
-    r"([^\n.,;]+?)\s*(?:[\n.,;]|$)")
+    r"([^\n.,;]+?)\s*(?:[\n.,;]|(?=\s+and\s)|$)")
 
 
 def extract_tests(prompt: str, func: str | None) -> list[tuple[str, str]]:
