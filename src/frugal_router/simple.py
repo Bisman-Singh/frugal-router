@@ -281,12 +281,95 @@ def _call(client, task_id, category, model, system, prompt, max_tokens, attempt,
 _LOCAL_SPENT = {"s": 0.0}
 
 
+_POT_FENCE = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL)
+_POT_NUM = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _run_pot(code: str, timeout: float = 6.0) -> str | None:
+    """Execute a tiny generated program in a bare sandbox; last printed number."""
+    import subprocess
+    import tempfile
+
+    try:
+        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+            f.write(code)
+            path = f.name
+        out = subprocess.run(["python3", "-I", path], capture_output=True,
+                             text=True, timeout=timeout, env={})
+        os.unlink(path)
+        nums = _POT_NUM.findall(out.stdout or "")
+        return nums[-1] if nums else None
+    except Exception:
+        return None
+
+
+def _try_math_pot(task_id, prompt, wall):
+    """Program-of-thought math: the local model writes a program, WE execute
+    it, and the result must agree with the model's independent direct answer.
+    Execution makes the arithmetic exact; agreement makes it trustworthy.
+    Any mismatch, parse failure, or timeout defers to remote."""
+    from . import local_tier
+
+    if time.monotonic() > wall - 240:
+        return None
+    if _LOCAL_SPENT["s"] > float(os.environ.get("LOCAL_TIME_BUDGET", "300")):
+        return None
+    if not local_tier.available():
+        return None
+    t0 = time.monotonic()
+    try:
+        gen = local_tier.generate(
+            "Write a short Python 3 program that computes the answer and prints "
+            "ONLY the final numeric value. No comments, no explanation, one "
+            "fenced code block.", prompt, 220)
+        m = _POT_FENCE.search(gen or "")
+        if not m:
+            return None
+        value = _run_pot(m.group(1))
+        if value is None:
+            return None
+        system, _ = CONTRACTS["math"]
+        direct = local_tier.generate(system, prompt, local_tier.CAPS.get("math", 120) if hasattr(local_tier, "CAPS") else 120)
+        d = _ANSWER_LINE.search(direct or "")
+        direct_val = None
+        if d:
+            nums = _POT_NUM.findall(d.group(1))
+            direct_val = nums[-1] if nums else None
+        if direct_val is None:
+            nums = _POT_NUM.findall(direct or "")
+            direct_val = nums[-1] if nums else None
+        if direct_val is None or abs(float(value) - float(direct_val)) > 1e-6:
+            return None                      # no independent agreement -> remote
+        v = float(value)
+        v = int(v) if v.is_integer() else v
+        answer = f"Computed by executing a program.\nAnswer: {v}"
+        if validate("math", prompt, answer) is not None:
+            return None
+        _record(task_id, "math", "local-pot", "ok", 0, None, "stop",
+                (time.monotonic() - t0) * 1000)
+        return answer
+    finally:
+        _LOCAL_SPENT["s"] += time.monotonic() - t0
+
+
 def _try_local(task_id, category, prompt, wall):
     """Answer via the baked local model when every gate agrees; None escalates.
     Gates: category eligibility, wall margin, a cumulative local-time budget
     (a slow box can never starve the remote fallback), format validation,
     label agreement across two samples (sentiment), and self-verification."""
     from . import local_tier
+
+    # Provable zero-token tiers first: spaCy spans verified verbatim against
+    # the source; math via executed-program + direct-answer agreement.
+    if category == "ner":
+        from . import ner_local
+        spans = ner_local.extract(prompt)
+        if spans is not None and validate("ner", prompt, spans) is None:
+            _record(task_id, "ner", "local-spacy", "ok", 0, None, "stop", 0)
+            return spans
+        # fall through to the model tier below
+    if category == "math":
+        return _try_math_pot(task_id, prompt, wall)
 
     if category not in local_tier.CATEGORIES:
         return None
@@ -582,7 +665,7 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
         from .tasks import Task as _Task0
 
         if local_tier.available():
-            cheap_first = {"sentiment": 0, "summarization": 1, "ner": 2, "factual": 3}
+            cheap_first = {"ner": 0, "sentiment": 1, "summarization": 2, "factual": 3}
             cats = {}
             for tid, prompt in tasks:
                 try:
@@ -591,7 +674,9 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
                     cats[tid] = "factual"
             handled = 0
             for tid, prompt in sorted(tasks, key=lambda t: cheap_first.get(cats[t[0]], 9)):
-                if cats[tid] not in local_tier.CATEGORIES:
+                # math rides the pre-pass too (program-of-thought, executed +
+                # agreement-gated); spaCy ner is cheapest of all (no LLM).
+                if cats[tid] not in local_tier.CATEGORIES and cats[tid] != "math":
                     continue
                 try:
                     local = _try_local(tid, cats[tid], prompt, wall)

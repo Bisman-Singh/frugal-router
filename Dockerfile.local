@@ -4,13 +4,26 @@ FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md v29-freeze.txt ./
 COPY src ./src
+COPY scripts/spacy_ner.py ./scripts/spacy_ner.py
 
-# Prebuilt CPU wheels: compiling llama.cpp under emulation is not viable.
-RUN pip install --no-cache-dir . && \
-    pip install --no-cache-dir "llama-cpp-python>=0.3.9" \
-      --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+# EXACT dependency pins from the proven v29 image (unpinned minors are the
+# leading suspect for judge-only failures), then the app with --no-deps so
+# nothing can drift. Prebuilt CPU wheels for llama.cpp (no emulation builds).
+RUN grep -v "^frugal-router" v29-freeze.txt > /tmp/pins.txt && \
+    pip install --no-cache-dir -r /tmp/pins.txt \
+      --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu && \
+    pip install --no-cache-dir --no-deps .
+
+# spaCy lives in its OWN venv: the app env keeps its pins byte-exact, and the
+# NER tier talks to it over a subprocess. Verbatim-span verification in the
+# app makes even a drifted spaCy unable to emit an unverifiable answer.
+RUN python -m venv /opt/spacyenv && \
+    /opt/spacyenv/bin/pip install --no-cache-dir spacy && \
+    /opt/spacyenv/bin/python -m spacy download en_core_web_md
+ENV SPACY_PY=/opt/spacyenv/bin/python \
+    SPACY_SCRIPT=/app/scripts/spacy_ner.py
 
 ARG GGUF=models/local.gguf.next
 COPY $GGUF /app/models/local.gguf
