@@ -303,5 +303,181 @@ def _syllogism(prompt: str) -> str | None:
     return None
 
 
-_MATH_SOLVERS = (_percent_of, _rate_time, _speed, _rectangle, _arithmetic)
+_PCT_TOKEN = re.compile(rf"({_NUM})\s*(?:percent|%)")
+
+
+def _base_and_pct(prompt: str) -> tuple[float, float] | None:
+    """Exactly two numbers, one clearly a percentage -> (base, pct). None if
+    ambiguous. Base is the number that is NOT the percent token."""
+    pm = _PCT_TOKEN.search(prompt)
+    if not pm or len(re.findall(rf"(?i)percent|%", prompt)) != 1:
+        return None
+    if len(re.findall(_NUM, prompt)) != 2:
+        return None
+    pct = float(pm.group(1))
+    base = None
+    for nm in re.finditer(_NUM, prompt):
+        if nm.start() == pm.start(1):
+            continue
+        base = float(nm.group())
+    return (base, pct) if base is not None else None
+
+
+def _discount(prompt: str) -> str | None:
+    """'A jacket costs $140 and is 30% off. Final price?' Single base + pct."""
+    low = prompt.lower()
+    if not re.search(r"(?i)\b(off|discount|reduced|sale|markdown)\b", low):
+        return None
+    if "then" in low or "additional" in low or "another" in low:
+        return None  # stacked -> different solver
+    bp = _base_and_pct(prompt)
+    if bp is None:
+        return None
+    base, pct = bp
+    if re.search(r"(?i)how much.*(save|saved|discount|less)|discount amount|amount saved", low):
+        return _format_number(base * pct / 100.0)
+    return _format_number(base * (1 - pct / 100.0))
+
+
+def _percent_increase(prompt: str) -> str | None:
+    """'A $200 item increased by 15%. New price?' Single base + pct."""
+    low = prompt.lower()
+    if not re.search(r"(?i)\b(increase|increased|rises?|rose|grew|grows?|markup|marked up|more)\b", low):
+        return None
+    if "then" in low or "additional" in low or re.search(r"(?i)\b(off|discount)\b", low):
+        return None
+    bp = _base_and_pct(prompt)
+    if bp is None:
+        return None
+    base, pct = bp
+    return _format_number(base * (1 + pct / 100.0))
+
+
+_STACK = re.compile(rf"(?i)({_NUM})\s*(?:percent|%)\s*off.*?(?:then|additional|another|plus)\s*(?:an\s+)?({_NUM})\s*(?:percent|%)\s*off", re.S)
+
+
+def _stacked_discount(prompt: str) -> str | None:
+    """'20% off, then an additional 10% off. Original $200. Final?'"""
+    m = _STACK.search(prompt)
+    if not m or len(re.findall(_NUM, prompt)) != 3:
+        return None
+    d1, d2 = float(m.group(1)), float(m.group(2))
+    base = None
+    used = {m.group(1), m.group(2)}
+    for nm in re.finditer(_NUM, prompt):
+        if nm.group() not in used or nm.start() not in (m.start(1), m.start(2)):
+            if nm.start() not in (m.start(1), m.start(2)):
+                base = float(nm.group())
+    if base is None:
+        return None
+    return _format_number(base * (1 - d1 / 100.0) * (1 - d2 / 100.0))
+
+
+_COMPOUND = re.compile(
+    rf"(?i)\$?({_NUM})\b.*?({_NUM})\s*(?:percent|%).*?(?:for|over)\s+({_NUM})\s*years?", re.S)
+
+
+def _compound_interest(prompt: str) -> str | None:
+    """'$1000 at 5% compounded annually for 2 years. Final amount?'"""
+    if not re.search(r"(?i)compound", prompt):
+        return None
+    m = _COMPOUND.search(prompt)
+    if not m or len(re.findall(_NUM, prompt)) != 3:
+        return None
+    p, r, t = float(m.group(1)), float(m.group(2)), float(m.group(3))
+    if not t.is_integer() or t > 50:
+        return None
+    amount = p * (1 + r / 100.0) ** t
+    if re.search(r"(?i)\binterest\s+earned|how much interest\b", prompt):
+        return _format_number(amount - p)
+    return _format_number(round(amount, 2))
+
+
+_SIMPLE = re.compile(
+    rf"(?i)\$?({_NUM})\b.*?({_NUM})\s*(?:percent|%).*?(?:for|over)\s+({_NUM})\s*years?", re.S)
+
+
+def _simple_interest(prompt: str) -> str | None:
+    """'$500 at 4% simple interest for 3 years. Interest earned?'"""
+    if not re.search(r"(?i)simple\s+interest", prompt):
+        return None
+    m = _SIMPLE.search(prompt)
+    if not m or len(re.findall(_NUM, prompt)) != 3:
+        return None
+    p, r, t = float(m.group(1)), float(m.group(2)), float(m.group(3))
+    interest = p * r / 100.0 * t
+    if re.search(r"(?i)\btotal|final amount|balance\b", prompt):
+        return _format_number(p + interest)
+    return _format_number(interest)
+
+
+_AVG = re.compile(rf"(?i)\b(?:average|mean)\s+of\s+([-\d.,\sand]+?)(?:\?|$|\.)")
+
+
+def _average(prompt: str) -> str | None:
+    """'What is the average of 10, 20, and 30?'"""
+    m = _AVG.search(prompt)
+    if not m:
+        return None
+    vals = [float(x) for x in re.findall(_NUM, m.group(1))]
+    if len(vals) < 2 or len(vals) != len(re.findall(_NUM, prompt)):
+        return None
+    return _format_number(sum(vals) / len(vals))
+
+
+_FRACTION = re.compile(rf"(?i)\b({_NUM})\s*/\s*({_NUM})\s+of\s+\$?({_NUM})\b")
+
+
+def _fraction_of(prompt: str) -> str | None:
+    """'What is 3/4 of 200?'"""
+    m = _FRACTION.search(prompt)
+    if not m or len(re.findall(_NUM, prompt)) != 3:
+        return None
+    num, den, whole = float(m.group(1)), float(m.group(2)), float(m.group(3))
+    if den == 0:
+        return None
+    return _format_number(num / den * whole)
+
+
+_RADIUS = re.compile(rf"(?i)\bradius\s+(?:of\s+)?({_NUM})")
+_DIAM = re.compile(rf"(?i)\bdiameter\s+(?:of\s+)?({_NUM})")
+
+
+def _circle(prompt: str) -> str | None:
+    """Circle area or circumference from radius or diameter (pi=3.14159)."""
+    import math
+    if not re.search(r"(?i)\bcircle|circular\b", prompt):
+        return None
+    if len(re.findall(_NUM, prompt)) != 1:
+        return None
+    rm, dm = _RADIUS.search(prompt), _DIAM.search(prompt)
+    if rm:
+        r = float(rm.group(1))
+    elif dm:
+        r = float(dm.group(1)) / 2.0
+    else:
+        return None
+    if re.search(r"(?i)\barea\b", prompt):
+        return _format_number(round(math.pi * r * r, 4))
+    if re.search(r"(?i)\bcircumference|perimeter\b", prompt):
+        return _format_number(round(2 * math.pi * r, 4))
+    return None
+
+
+_TRI = re.compile(rf"(?i)\bbase\s+(?:of\s+)?({_NUM})\b.*?\bheight\s+(?:of\s+)?({_NUM})", re.S)
+
+
+def _triangle(prompt: str) -> str | None:
+    """Triangle area from base and height."""
+    if not re.search(r"(?i)\btriangle\b", prompt) or not re.search(r"(?i)\barea\b", prompt):
+        return None
+    m = _TRI.search(prompt)
+    if not m or len(re.findall(_NUM, prompt)) != 2:
+        return None
+    return _format_number(0.5 * float(m.group(1)) * float(m.group(2)))
+
+
+_MATH_SOLVERS = (_percent_of, _discount, _percent_increase, _stacked_discount,
+                 _compound_interest, _simple_interest, _average, _fraction_of,
+                 _circle, _triangle, _rate_time, _speed, _rectangle, _arithmetic)
 _LOGIC_SOLVERS = (_syllogism, _ordering)

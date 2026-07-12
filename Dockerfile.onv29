@@ -1,0 +1,15 @@
+# Layer efficiency-only source changes DIRECTLY on the proven v29 image.
+# Inherits v29's exact base bytes, deps, and model — the environment that
+# passes the judge — and changes ONLY the Python source. No reinstall of deps
+# or base, which is the suspected cause of every from-scratch rebuild failing.
+FROM bismansinghmadaan/frugal-router:v29
+
+# Overwrite just the source, reinstall the package alone (never its deps).
+COPY pyproject.toml README.md ./
+COPY src /app/src
+RUN pip install --no-cache-dir --no-deps --force-reinstall . && \
+    python -c "import frugal_router.simple, frugal_router.ner_local; print('import OK')"
+
+# PoT math active (stdlib only); NER defers to the model when SPACY_PY is unset
+# (no spaCy layer added -> zero new environment surface). Batching stays off.
+ENV BATCH=0
