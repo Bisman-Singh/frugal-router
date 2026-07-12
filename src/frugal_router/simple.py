@@ -352,6 +352,30 @@ def _try_math_pot(task_id, prompt, wall):
         _LOCAL_SPENT["s"] += time.monotonic() - t0
 
 
+def _try_code_exec(task_id, prompt, wall):
+    """code_gen at 0 tokens ONLY when a local generation passes tests extracted
+    from the prompt. No tests / fail / timeout -> defer to remote unchanged."""
+    from . import code_verify, local_tier
+    if not local_tier.available() or time.monotonic() > wall - 240:
+        return None
+    if _LOCAL_SPENT["s"] > float(os.environ.get("LOCAL_TIME_BUDGET", "300")):
+        return None
+    t0 = time.monotonic()
+    try:
+        code = code_verify.verify_code_gen(
+            prompt, local_tier.generate,
+            cap=int(os.environ.get("BUDGET_CODE", "400")))
+    except Exception:
+        code = None
+    finally:
+        _LOCAL_SPENT["s"] += time.monotonic() - t0
+    if code and validate("code_gen", prompt, code) is None:
+        _record(task_id, "code_gen", "local-exec", "ok", 0, None, "stop",
+                (time.monotonic() - t0) * 1000)
+        return code
+    return None
+
+
 def _try_local(task_id, category, prompt, wall):
     """Answer via the baked local model when every gate agrees; None escalates.
     Gates: category eligibility, wall margin, a cumulative local-time budget
@@ -370,6 +394,8 @@ def _try_local(task_id, category, prompt, wall):
         # fall through to the model tier below
     if category == "math":
         return _try_math_pot(task_id, prompt, wall)
+    if category == "code_gen":
+        return _try_code_exec(task_id, prompt, wall)
 
     if category not in local_tier.CATEGORIES:
         return None
@@ -676,7 +702,7 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
             for tid, prompt in sorted(tasks, key=lambda t: cheap_first.get(cats[t[0]], 9)):
                 # math rides the pre-pass too (program-of-thought, executed +
                 # agreement-gated); spaCy ner is cheapest of all (no LLM).
-                if cats[tid] not in local_tier.CATEGORIES and cats[tid] != "math":
+                if cats[tid] not in local_tier.CATEGORIES and cats[tid] not in ("math", "code_gen"):
                     continue
                 try:
                     local = _try_local(tid, cats[tid], prompt, wall)
