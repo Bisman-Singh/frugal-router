@@ -286,21 +286,14 @@ _POT_NUM = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 def _run_pot(code: str, timeout: float = 6.0) -> str | None:
-    """Execute a tiny generated program in a bare sandbox; last printed number."""
-    import subprocess
-    import tempfile
+    """Execute a tiny generated program in the hardened sandbox; last printed
+    number. The sandbox caps CPU/memory and blocks sockets, so a stray import
+    or network call in model-written code cannot escape or stall the run."""
+    from .sandbox import run_python
 
-    try:
-        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-            f.write(code)
-            path = f.name
-        out = subprocess.run(["python3", "-I", path], capture_output=True,
-                             text=True, timeout=timeout, env={})
-        os.unlink(path)
-        nums = _POT_NUM.findall(out.stdout or "")
-        return nums[-1] if nums else None
-    except Exception:
-        return None
+    result = run_python(code, timeout_s=timeout)
+    nums = _POT_NUM.findall(result.stdout)
+    return nums[-1] if nums else None
 
 
 def _try_math_pot(task_id, prompt, wall):
