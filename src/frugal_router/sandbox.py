@@ -13,8 +13,12 @@ Containment layers, defence in depth:
   * ``python -I`` isolated mode (no site, no user env hooks) and a cleared
     environment (``env={}``) so no secrets or PYTHON* switches leak in.
   * A prepended prelude that neuters ``socket.socket`` / ``_socket.socket``
-    before any user statement executes, so network calls raise in-process even
-    without ``--network none``.
+    AND the process-spawning primitives (``subprocess`` builds on
+    ``_posixsubprocess.fork_exec``; also ``os.fork``/``system``/``popen``/
+    ``posix_spawn``) before any user statement executes, so network calls raise
+    in-process and cannot be escaped by spawning a fresh interpreter. This is
+    defence in depth: ``--network none`` on the container is the PRIMARY
+    guarantee; the prelude catches accidental egress from model-written code.
   * POSIX ``rlimit``s (CPU seconds, address space, open files, file size,
     processes) applied in the child between fork and exec. Each limit is
     best-effort: a platform that rejects one (macOS does not honour
@@ -34,18 +38,26 @@ from dataclasses import dataclass
 _CAP = 64 * 1024  # bytes retained per stream
 
 # Executed before any user statement. Prints nothing, so stdout is untouched.
+# Neuters both network primitives and process spawning: patching sockets in
+# this process alone is escapable by spawning a fresh interpreter, so we also
+# block the spawn primitives (subprocess sits on _posixsubprocess.fork_exec).
 _PRELUDE = (
-    "import socket as _s, _socket as _sl\n"
     "def _blocked(*a, **k):\n"
-    "    raise OSError('network access is disabled in the sandbox')\n"
-    "_s.socket = _blocked\n"
-    "_sl.socket = _blocked\n"
-    "_s.create_connection = _blocked\n"
+    "    raise OSError('network/process access is disabled in the sandbox')\n"
+    "import socket as _s, _socket as _sl, os as _os\n"
+    "_s.socket = _s.create_connection = _sl.socket = _blocked\n"
+    "for _n in ('socketpair',):\n"
+    "    setattr(_s, _n, _blocked)\n"
+    "for _n in ('system', 'popen', 'fork', 'posix_spawn', 'posix_spawnp',\n"
+    "           'execv', 'execve', 'execvp', 'spawnv', 'spawnvp'):\n"
+    "    if hasattr(_os, _n):\n"
+    "        setattr(_os, _n, _blocked)\n"
     "try:\n"
-    "    _s.socketpair = _blocked\n"
+    "    import _posixsubprocess as _ps\n"
+    "    _ps.fork_exec = _blocked\n"
     "except Exception:\n"
     "    pass\n"
-    "del _s, _sl, _blocked\n"
+    "del _s, _sl, _os, _blocked, _n\n"
 )
 
 

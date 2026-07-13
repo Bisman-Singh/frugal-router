@@ -28,12 +28,13 @@ CITIES = ["Toronto", "Nairobi", "Oslo", "Jakarta", "Lima", "Prague", "Seoul"]
 MONTHS = ["January", "March", "June", "September", "November"]
 ITEMS = ["notebooks", "chairs", "phone cases", "mugs", "backpacks", "keyboards"]
 
-# (category noun, verb, [values]) sets for the assignment-CSP archetype.
+# (category noun, base-form verb, [values]) for the assignment-CSP archetype.
+# Verbs are base form so "{verb}s" ("owns", "picks") stays grammatical.
 CSP_DOMAINS = [
     ("pet", "own", ["cat", "dog", "bird", "fish", "rabbit"]),
-    ("color", "chose", ["red", "blue", "green", "yellow", "purple"]),
-    ("tree", "planted", ["oak", "elm", "pine", "maple", "birch"]),
-    ("drink", "ordered", ["tea", "coffee", "juice", "water", "cola"]),
+    ("color", "pick", ["red", "blue", "green", "yellow", "purple"]),
+    ("tree", "plant", ["oak", "elm", "pine", "maple", "birch"]),
+    ("drink", "order", ["tea", "coffee", "juice", "water", "cola"]),
     ("sport", "play", ["tennis", "chess", "rugby", "hockey", "golf"]),
 ]
 

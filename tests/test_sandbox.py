@@ -67,6 +67,24 @@ def test_output_flood_truncated():
     assert len(res.stdout) <= 64 * 1024
 
 
+def test_subprocess_spawn_blocked():
+    # The socket block is parent-only, so spawning a fresh interpreter would be
+    # an escape hatch. The prelude neuters subprocess/os spawn primitives too.
+    res = run_python(
+        "import subprocess, sys\n"
+        "subprocess.run([sys.executable, '-c', 'print(1)'])\n"
+        "print('SPAWNED')\n"
+    )
+    assert "SPAWNED" not in res.stdout
+    assert res.returncode != 0
+
+
+def test_os_system_blocked():
+    res = run_python("import os\nos.system('echo hi')\nprint('RAN')\n")
+    assert "RAN" not in res.stdout
+    assert res.returncode != 0
+
+
 def test_never_raises_on_garbage():
     res = run_python("this is not valid python !!!")
     assert isinstance(res, RunResult)
