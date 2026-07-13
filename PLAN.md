@@ -241,6 +241,21 @@ No new runtime dependency (dev-only script). Green.
 - Evidence: full suite **178 passed**, 0 skips. Committed `data/variants.jsonl`
   (seed 7) as a reference sample.
 
+### Review pass (Fable) — hardening + fixes
+
+- **Sandbox escape closed.** The socket monkeypatch was parent-process only; a
+  model program could spawn a fresh interpreter (`subprocess`/`os.system`) with
+  working sockets — on the Linux judge NPROC=256 permits that spawn. Prelude
+  now also neuters `_posixsubprocess.fork_exec` + `os.{system,popen,fork,
+  posix_spawn,exec*,spawn*}`. Verified: spawn/os.system escapes blocked, PoT
+  arithmetic + code asserts still run. Docstring made honest: this is
+  defence-in-depth; `--network none` is the primary guarantee. +2 tests.
+- **Variant grammar fixed.** CSP verbs were past/base-tense ("ordered"→
+  "ordereds"); switched to base form so "{verb}s" stays grammatical. Prompts
+  now read correctly; eval unchanged (24/24, 100%/100%).
+- Re-verified: full suite **180 passed**; deterministic eval reproduces
+  24/24 at 100% coverage / 100% accuracy.
+
 ## Summary
 
 All four gaps landed on `feat/zero-gaps` (off `origin/main`), full suite
