@@ -9,10 +9,9 @@ gate. Nothing here can ship unverified code.
 from __future__ import annotations
 
 import ast
-import os
 import re
-import subprocess
-import tempfile
+
+from .sandbox import run_python
 
 _FENCE = re.compile(r"```(?:python)?\s*\n(.*?)```", re.S)
 _FUNC = re.compile(r"(?i)function\s+(?:named\s+|called\s+)?`?([A-Za-z_]\w*)`?")
@@ -73,16 +72,7 @@ def _run(code: str, tests: list[tuple[str, str]], timeout: float = 5.0) -> bool:
         lines.append(f"assert ({call}) == ({exp})")
     lines.append("print('ALLPASS')")
     prog = "\n".join(lines)
-    try:
-        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-            f.write(prog)
-            path = f.name
-        out = subprocess.run(["python3", "-I", path], capture_output=True,
-                             timeout=timeout, env={})
-        os.unlink(path)
-        return b"ALLPASS" in out.stdout
-    except Exception:
-        return False
+    return "ALLPASS" in run_python(prog, timeout_s=timeout).stdout
 
 
 def verify_code_gen(prompt: str, generate_fn, cap: int = 400) -> str | None:

@@ -13,3 +13,5 @@ dist/
 # Internal strategy notes, never committed
 PLAYBOOK.md
 training/sft.jsonl
+models/*.gguf.next
+rehearsal-kit/

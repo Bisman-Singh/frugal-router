@@ -540,6 +540,108 @@ def _single_die(prompt: str) -> str | None:
     return "1/6 (about 0.1667)"
 
 
+# --------------------------------------------------- assignment CSP puzzles --
+
+# "Sam, Jo, and Lee each ... a different pet: cat, dog, bird." The names, then
+# a "different <noun>:" bridge, then the value list. "different" is required:
+# it is the signal that the mapping is a bijection (each entity a distinct
+# value), which is what makes brute-force enumeration a valid proof.
+_CSP_SETUP = re.compile(
+    r"([A-Z][a-z]+(?:\s*,\s*[A-Z][a-z]+){1,3}\s*,?\s+and\s+[A-Z][a-z]+)"
+    r"\s+[\w\s]{0,40}?\bdifferent\b[\w\s]{0,25}?[:：]\s*"
+    r"([A-Za-z][\w][\w\s,]*?[A-Za-z0-9])\s*(?:[.\n]|$)")
+_SENT = re.compile(r"[^.?!]+[.?!]?")
+_CSP_NAME = re.compile(r"[A-Z][a-z]+")
+_CSP_LIST_SEP = re.compile(r"\s*,\s*and\s+|\s*,\s*|\s+and\s+")
+_CSP_ARTICLE = re.compile(r"(?i)^(?:an?|the)\s+")
+_CSP_NEG = re.compile(r"(?i)\b(?:not|never|cannot|neither)\b|n't")
+
+
+def _csp_values(raw: str) -> list[str]:
+    out = []
+    for tok in _CSP_LIST_SEP.split(raw.strip()):
+        tok = _CSP_ARTICLE.sub("", tok.strip()).strip().rstrip(".")
+        if tok:
+            out.append(tok)
+    return out
+
+
+def _mentions(sentence: str, token: str) -> bool:
+    return re.search(rf"(?<!\w){re.escape(token)}(?!\w)", sentence, re.I) is not None
+
+
+def _assignment_csp(prompt: str) -> str | None:
+    """Bijective constraint puzzles: N named entities each hold a distinct one
+    of N values; pairwise clues pin/forbid pairings; the question asks who has
+    a value or what value an entity has. Enumerate the N! assignments, keep
+    those satisfying every clue, and answer ONLY when exactly one survives AND
+    every clue sentence was parsed (an unparsed clue means the model of the
+    puzzle is incomplete, so nothing is proven)."""
+    m = _CSP_SETUP.search(prompt)
+    if not m:
+        return None
+    names = _CSP_NAME.findall(m.group(1))
+    values = _csp_values(m.group(2))
+    n = len(names)
+    if not (3 <= n <= 5) or len(values) != n:
+        return None
+    if len(set(names)) != n or len({v.lower() for v in values}) != n:
+        return None
+    if {x.lower() for x in names} & {v.lower() for v in values}:
+        return None  # a token that is both a name and a value: too ambiguous
+
+    setup_span = m.span()
+    constraints: list[tuple[str, str, bool]] = []
+    question: tuple[list[str], list[str]] | None = None
+    for sm in _SENT.finditer(prompt):
+        sent = sm.group()
+        if not sent.strip():
+            continue
+        if sm.start() < setup_span[1] and sm.end() > setup_span[0]:
+            continue  # the setup sentence itself
+        found_names = [nm for nm in names if _mentions(sent, nm)]
+        found_vals = [v for v in values if _mentions(sent, v)]
+        if "?" in sent:
+            if question is not None:
+                return None  # two questions: out of scope
+            question = (found_names, found_vals)
+            continue
+        if not found_names and not found_vals:
+            continue  # filler with no entities/values
+        if len(found_names) != 1 or len(found_vals) != 1:
+            return None  # a clue we cannot parse cleanly: defer
+        positive = not _CSP_NEG.search(sent)
+        constraints.append((found_names[0], found_vals[0], positive))
+    if question is None or not constraints:
+        return None
+
+    from itertools import permutations
+
+    lowered = {v: v.lower() for v in values}
+    solutions = []
+    for perm in permutations(values):
+        assign = dict(zip(names, perm))
+        ok = True
+        for nm, val, positive in constraints:
+            has = lowered[assign[nm]] == val.lower()
+            if has != positive:
+                ok = False
+                break
+        if ok:
+            solutions.append(assign)
+    if len(solutions) != 1:
+        return None
+    assign = solutions[0]
+
+    q_names, q_vals = question
+    if len(q_vals) == 1 and not q_names:            # "who has <value>?"
+        for nm, val in assign.items():
+            if lowered[val] == q_vals[0].lower():
+                return nm
+        return None
+    if len(q_names) == 1 and not q_vals:            # "what does <name> have?"
+        return assign[q_names[0]]
+    return None
 _MATH_SOLVERS = (_percent_of, _discount, _percent_increase, _stacked_discount,
                  _compound_interest, _simple_interest, _average, _fraction_of,
                  _circle, _triangle, _rate_time, _speed, _rectangle, _earnings,
@@ -556,4 +658,8 @@ def _ordering_search(prompt: str) -> str | None:
     return logic_search.ordering_search(prompt)
 
 
-_LOGIC_SOLVERS = (_syllogism, _ordering, _syllogism_validity, _ordering_search)
+# Union of both branches: pattern solvers first (cheapest), then the search
+# engines (syllogism model checking, per-dimension ordering), then the
+# assignment-CSP enumerator. All prove-or-defer, so order only affects cost.
+_LOGIC_SOLVERS = (_syllogism, _ordering, _syllogism_validity, _ordering_search,
+                  _assignment_csp)

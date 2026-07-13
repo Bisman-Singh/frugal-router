@@ -286,21 +286,14 @@ _POT_NUM = re.compile(r"-?\d+(?:\.\d+)?")
 
 
 def _run_pot(code: str, timeout: float = 6.0) -> str | None:
-    """Execute a tiny generated program in a bare sandbox; last printed number."""
-    import subprocess
-    import tempfile
+    """Execute a tiny generated program in the hardened sandbox; last printed
+    number. The sandbox caps CPU/memory and blocks sockets, so a stray import
+    or network call in model-written code cannot escape or stall the run."""
+    from .sandbox import run_python
 
-    try:
-        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-            f.write(code)
-            path = f.name
-        out = subprocess.run(["python3", "-I", path], capture_output=True,
-                             text=True, timeout=timeout, env={})
-        os.unlink(path)
-        nums = _POT_NUM.findall(out.stdout or "")
-        return nums[-1] if nums else None
-    except Exception:
-        return None
+    result = run_python(code, timeout_s=timeout)
+    nums = _POT_NUM.findall(result.stdout)
+    return nums[-1] if nums else None
 
 
 def _try_math_pot(task_id, prompt, wall):
@@ -386,6 +379,31 @@ def _try_code_exec(task_id, prompt, wall):
     return None
 
 
+def _try_code_debug(task_id, prompt, wall):
+    """code_debug at 0 tokens ONLY when the buggy snippet reproducibly fails a
+    prompt-extracted example and a local fix, prompted with that OBSERVED
+    failure, passes every example. Otherwise defer to remote unchanged."""
+    from . import code_debug, local_tier
+    if not local_tier.available() or time.monotonic() > wall - 240:
+        return None
+    if _LOCAL_SPENT["s"] > float(os.environ.get("LOCAL_TIME_BUDGET", "300")):
+        return None
+    t0 = time.monotonic()
+    try:
+        answer = code_debug.verify_code_debug(
+            prompt, local_tier.generate,
+            cap=int(os.environ.get("BUDGET_CODE", "400")))
+    except Exception:
+        answer = None
+    finally:
+        _LOCAL_SPENT["s"] += time.monotonic() - t0
+    if answer and validate("code_debug", prompt, answer) is None:
+        _record(task_id, "code_debug", "local-exec", "ok", 0, None, "stop",
+                (time.monotonic() - t0) * 1000)
+        return answer
+    return None
+
+
 def _try_local(task_id, category, prompt, wall):
     """Answer via the baked local model when every gate agrees; None escalates.
     Gates: category eligibility, wall margin, a cumulative local-time budget
@@ -406,6 +424,8 @@ def _try_local(task_id, category, prompt, wall):
         return _try_math_pot(task_id, prompt, wall)
     if category == "code_gen":
         return _try_code_exec(task_id, prompt, wall)
+    if category == "code_debug":
+        return _try_code_debug(task_id, prompt, wall)
 
     if category not in local_tier.CATEGORIES:
         return None
@@ -734,8 +754,10 @@ def run_simple(input_path="/input/tasks.json", output_path="/output/results.json
             handled = 0
             for tid, prompt in sorted(tasks, key=lambda t: cheap_first.get(cats[t[0]], 9)):
                 # math rides the pre-pass too (program-of-thought, executed +
-                # agreement-gated); spaCy ner is cheapest of all (no LLM).
-                if cats[tid] not in local_tier.CATEGORIES and cats[tid] not in ("math", "code_gen"):
+                # agreement-gated); code_gen/code_debug are execution-verified;
+                # spaCy ner is cheapest of all (no LLM).
+                if cats[tid] not in local_tier.CATEGORIES and \
+                        cats[tid] not in ("math", "code_gen", "code_debug"):
                     continue
                 try:
                     local = _try_local(tid, cats[tid], prompt, wall)
