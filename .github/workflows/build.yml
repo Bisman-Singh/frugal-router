@@ -1,7 +1,8 @@
 name: build-amd64
-# Pure build test: v40's exact source, built on a native-amd64 runner with the
-# classic docker builder (not local buildx), to isolate whether the build
-# environment is why locally-built images fail on the judge.
+# Native-amd64 clean-machine build test. Builds BOTH:
+#   v46-ci-identity  = v40's exact source (pure build test: does a CI rebuild run on the judge?)
+#   v46-ci-terse     = v40 source + terse contracts (the actual improvement)
+# Classic docker build, ubuntu-latest runner, layered on the proven v29 base.
 on:
   workflow_dispatch:
   push:
@@ -16,16 +17,27 @@ jobs:
       - name: Show builder + arch
         run: |
           uname -m
-          docker version --format '{{.Server.Version}}'
+          docker version --format 'Server={{.Server.Version}}'
 
       - name: Log in to Docker Hub
         run: echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
-      - name: Build (classic docker build, layered on v29)
+      - name: Build v46-ci-identity (v40 exact source)
         run: docker build -f Dockerfile -t bismansinghmadaan/frugal-router:v46-ci-identity .
 
-      - name: Push
+      - name: Push identity
         run: docker push bismansinghmadaan/frugal-router:v46-ci-identity
 
-      - name: Report digest
-        run: docker inspect bismansinghmadaan/frugal-router:v46-ci-identity --format 'Arch={{.Architecture}}/{{.Os}} Id={{.Id}}'
+      - name: Swap in terse contracts
+        run: cp terse_simple.py src/frugal_router/simple.py
+
+      - name: Build v46-ci-terse (v40 source + terse contracts)
+        run: docker build -f Dockerfile -t bismansinghmadaan/frugal-router:v46-ci-terse .
+
+      - name: Push terse
+        run: docker push bismansinghmadaan/frugal-router:v46-ci-terse
+
+      - name: Report
+        run: |
+          docker inspect bismansinghmadaan/frugal-router:v46-ci-identity --format 'identity {{.Architecture}}/{{.Os}} {{.Id}}'
+          docker inspect bismansinghmadaan/frugal-router:v46-ci-terse    --format 'terse    {{.Architecture}}/{{.Os}} {{.Id}}'
