@@ -1,0 +1,10 @@
+# The 0-token submission variant: identical bytes to v43-merged, with Lane B
+# (FULL_LOCAL) switched on at build time. Every task is answered by the
+# deterministic tiers or the baked local model; the network is never used, so
+# scored remote tokens are zero by construction. Rehearsed at the judge
+# envelope (--cpus=2 --memory=4g): 19/19, 418s wall, exit 0.
+#
+# No pip, no COPY, no dependency surface: an ENV-only layer cannot re-trigger
+# the from-scratch build failure ("the curse").
+FROM bismansinghmadaan/frugal-router:v43-merged
+ENV FULL_LOCAL=1
