@@ -1,0 +1,78 @@
+[
+  {
+    "task_id": "math-pot-1",
+    "prompt": "A bakery fills 8 trays with 13 cupcakes each, then gives 17 cupcakes away. How many cupcakes remain?"
+  },
+  {
+    "task_id": "math-pot-2",
+    "prompt": "A runner completes laps of 2.5 km, 3.25 km, and 4.75 km. What total distance did the runner cover?"
+  },
+  {
+    "task_id": "logic-csp-1",
+    "prompt": "Mina, Omar, and Priya each chose a different color: red, blue, green. Omar chose green. Mina did not choose blue. Which color did Priya choose?"
+  },
+  {
+    "task_id": "logic-order-1",
+    "prompt": "Ava finished before Ben. Ben finished before Chen. Who finished last?"
+  },
+  {
+    "task_id": "logic-syllogism-1",
+    "prompt": "All rops are taves. All taves are nims. Yes or no: are all rops definitely nims?"
+  },
+  {
+    "task_id": "code-gen-1",
+    "prompt": "Write a Python function `triple` that returns three times its integer argument. For example, triple(4) should return 12, and triple(0) == 0."
+  },
+  {
+    "task_id": "code-gen-2",
+    "prompt": "Write a Python function `is_even` that returns True for even integers and False for odd integers. For example, is_even(8) returns True and is_even(7) == False."
+  },
+  {
+    "task_id": "code-debug-1",
+    "prompt": "The function `get_max` should return the largest number in a list. For example, get_max([3, 1, 5]) returns 5. Find and fix the bug.\n```python\ndef get_max(nums):\n    return nums[0]\n```"
+  },
+  {
+    "task_id": "code-debug-2",
+    "prompt": "The function `double` should return twice its input. For example, double(6) returns 12. Find and fix the bug.\n```python\ndef double(x):\n    return x + 2\n```"
+  },
+  {
+    "task_id": "sentiment-1",
+    "prompt": "Classify the sentiment of this review as positive, negative, or neutral: 'The battery lasted all weekend and the screen is wonderfully clear.'"
+  },
+  {
+    "task_id": "sentiment-2",
+    "prompt": "Classify the sentiment of this review as positive, negative, or neutral: 'The delivery was late and the device stopped charging after two days.'"
+  },
+  {
+    "task_id": "ner-1",
+    "prompt": "Extract named entities from this text, using person, organization, location, and date labels: On June 3, 2024, Alice Meier of Helios Motors spoke in Jakarta."
+  },
+  {
+    "task_id": "summary-1",
+    "prompt": "Summarize in one sentence: The town council approved a new bus route after residents requested better access to the hospital and the railway station."
+  },
+  {
+    "task_id": "summary-2",
+    "prompt": "Summarize in one sentence: Researchers restored a wetland by removing invasive plants, then documented a return of native birds and amphibians over two years."
+  },
+  {
+    "task_id": "factual-1",
+    "prompt": "Explain how photosynthesis converts light energy into chemical energy."
+  },
+  {
+    "task_id": "factual-2",
+    "prompt": "Describe why regular backups are important for a small business."
+  },
+  {
+    "task_id": "math-pot-3",
+    "prompt": "A library has 14 shelves with 27 books on each shelf, then receives 35 more books. How many books does it have now?"
+  },
+  {
+    "task_id": "logic-csp-2",
+    "prompt": "Drew, Eva, and Finn each adopted a different pet: cat, dog, bird. Drew adopted the bird. Eva did not adopt the cat. Who adopted the dog?"
+  },
+  {
+    "task_id": "factual-3",
+    "prompt": "Explain the difference between renewable and non-renewable energy sources."
+  }
+]

@@ -256,7 +256,7 @@ No new runtime dependency (dev-only script). Green.
 - Re-verified: full suite **180 passed**; deterministic eval reproduces
   24/24 at 100% coverage / 100% accuracy.
 
-### Docker smoke (Fable, real image) — PASS
+### Docker smoke (Fable, real image) — PASS (functional); 2-vCPU timing pending
 
 Built the real deploy path `Dockerfile.onv29` (pulls `bismansinghmadaan/
 frugal-router:v29`, layers only `src/`) on native linux/amd64. Image 5.38 GB
@@ -273,19 +273,24 @@ frugal-router:v29`, layers only `src/`) on native linux/amd64. Image 5.38 GB
   results.json, all 7 solver tasks correct incl. my CSP (csp1→Alice,
   csp2→blue); the factual task answered by the baked local model. **0 remote
   tokens.**
-- Target-envelope run `--cpus 4 --memory 4g --memory-swap 4g --network none`,
-  `LOCAL=1`: **exit 0, did not OOM within 4 GB**, 8/8 non-empty, wall 33 s
-  (25 s of it the one-time model load + a single local generation), ledger
-  `prompt_tokens=0, completion_tokens=0` → **REMOTE TOKENS: 0**.
+- The recorded constrained run used `--cpus 4 --memory 4g --memory-swap 4g
+  --network none`, `LOCAL=1`: **exit 0, did not OOM within 4 GB**, 8/8
+  non-empty, wall 33 s (25 s of it the one-time model load + a single local
+  generation), ledger `prompt_tokens=0, completion_tokens=0` → **REMOTE
+  TOKENS: 0**. This is valid functional and 4-GB evidence, but it is **not**
+  a timing result for the scoring machine: the judge envelope is **2 vCPU / 4
+  GB**, not 4 vCPU / 4 GB.
 
 Not smoked in-image: PoT-math / code_debug end-to-end (the fixture's math was
 all solver-covered, so the model-code paths didn't trigger; they are covered
 by unit tests with mocked generation). A fuller 19-task, several-model-tier
-timing run would better bound wall time — model LOAD dominated here.
+timing run would better bound wall time — model LOAD dominated here. The
+rehearsal must run with `--cpus 2 --memory 4g --memory-swap 4g --network none`;
+do not claim it fits the target timing envelope until that run completes.
 
 ## Summary
 
 All four gaps landed on `feat/zero-gaps` (off `origin/main`), full suite
-**178 passed** (141 baseline + 37 new), every new module stdlib-only and
+**180 passed** (141 baseline + 39 new), every new module stdlib-only and
 onv29-layerable, no new runtime dependency, no stored answers. Ready for
 reviewer verification (checklist above).
